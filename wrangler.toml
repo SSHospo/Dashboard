@@ -1,0 +1,17 @@
+name = "cranky-cafe-dashboard"
+main = "worker.js"
+compatibility_date = "2026-07-01"
+compatibility_flags = ["nodejs_compat"]
+
+[assets]
+directory = "./public"
+binding = "ASSETS"
+
+[[kv_namespaces]]
+binding = "TOKENS"
+id = "REPLACE_AFTER_FIRST_DEPLOY"
+
+# Rung-2 fallback (scheduled pull of a provider export) — leave commented until
+# a source actually needs it, per capability-matrix.md.
+# [triggers]
+# crons = ["17 5 * * *"]

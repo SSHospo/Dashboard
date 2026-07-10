@@ -1,0 +1,408 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Your Dashboard</title>
+<style>
+  :root {
+    --surface-1:      #fcfcfb;
+    --page:           #f9f9f7;
+    --text-primary:   #0b0b0b;
+    --text-secondary: #52514e;
+    --text-muted:     #898781;
+    --gridline:       #e1e0d9;
+    --border:         rgba(11,11,11,0.10);
+    --series-1:       #2a78d6;
+    --good:           #0ca30c;
+    --warning:        #fab219;
+    --critical:       #d03b3b;
+    --accent:         #2a78d6;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --surface-1:      #1a1a19;
+      --page:           #0d0d0d;
+      --text-primary:   #ffffff;
+      --text-secondary: #c3c2b7;
+      --text-muted:     #898781;
+      --gridline:       #2c2c2a;
+      --border:         rgba(255,255,255,0.10);
+      --series-1:       #3987e5;
+      --good:           #0ca30c;
+      --warning:        #fab219;
+      --critical:       #e66767;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: var(--page);
+    color: var(--text-primary);
+  }
+  .center-screen {
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  .card {
+    background: var(--surface-1);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 32px;
+    width: 100%;
+    max-width: 380px;
+  }
+  .card h1 { font-size: 20px; margin: 0 0 8px; }
+  .card p.hint { color: var(--text-secondary); font-size: 14px; margin: 0 0 20px; }
+  input[type="password"], input[type="text"], input[type="number"], select, input[type="color"], input[type="date"] {
+    width: 100%;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--page);
+    color: var(--text-primary);
+    font-size: 15px;
+    margin-bottom: 12px;
+  }
+  button {
+    width: 100%;
+    padding: 11px;
+    border: none;
+    border-radius: 8px;
+    background: var(--accent);
+    color: white;
+    font-size: 15px;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  button.secondary {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-primary);
+  }
+  button:disabled { opacity: 0.5; cursor: default; }
+  .error-text { color: var(--critical); font-size: 14px; margin: 8px 0 0; }
+  #app { display: none; }
+  header.top {
+    display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between;
+    gap: 12px; padding: 20px 28px; border-bottom: 1px solid var(--gridline);
+  }
+  header.top h1 { font-size: 18px; margin: 0; }
+  .period-select { display: flex; gap: 6px; flex-wrap: wrap; }
+  .period-select button {
+    width: auto; padding: 7px 12px; font-size: 13px; font-weight: 500;
+    background: var(--page); color: var(--text-secondary); border: 1px solid var(--border);
+  }
+  .period-select button.active { background: var(--accent); color: white; border-color: var(--accent); }
+  .banner {
+    margin: 16px 28px 0; padding: 10px 16px; border-radius: 8px;
+    background: rgba(250,178,25,0.15); border: 1px solid var(--warning);
+    color: var(--text-primary); font-size: 14px;
+  }
+  main { padding: 20px 28px 48px; }
+  .kpi-row {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 14px; margin-bottom: 28px;
+  }
+  .tile {
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 16px 18px;
+  }
+  .tile .label { font-size: 13px; color: var(--text-secondary); margin-bottom: 6px; }
+  .tile .value { font-size: 26px; font-weight: 600; margin-bottom: 2px; }
+  .tile .sub { font-size: 13px; color: var(--text-muted); margin-bottom: 8px; }
+  .tile .deltas { display: flex; flex-direction: column; gap: 3px; font-size: 12.5px; color: var(--text-secondary); }
+  .tile .deltas .good { color: var(--good); font-weight: 600; }
+  .tile .deltas .critical { color: var(--critical); font-weight: 600; }
+  .tile svg { display: block; margin-top: 8px; }
+  .panels { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+  @media (max-width: 720px) { .panels { grid-template-columns: 1fr; } }
+  .panel { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
+  .panel h2 { font-size: 15px; margin: 0 0 14px; }
+  .conn-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--gridline); }
+  .conn-row:last-child { border-bottom: none; }
+  .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; }
+  .dot.on { background: var(--good); } .dot.off { background: var(--text-muted); }
+  a.link-btn { display: inline-block; padding: 6px 12px; border-radius: 6px; background: var(--accent); color: white; text-decoration: none; font-size: 13px; font-weight: 600; }
+  .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  label { font-size: 13px; color: var(--text-secondary); display: block; margin-bottom: 4px; }
+  .muted-note { font-size: 12.5px; color: var(--text-muted); margin-top: 6px; }
+</style>
+</head>
+<body>
+
+<div id="screen-setup" class="center-screen" style="display:none;">
+  <form class="card" id="setup-form">
+    <h1>Set your dashboard password</h1>
+    <p class="hint">This is the password for opening your dashboard. Choose something only you and your team should know.</p>
+    <input type="password" id="setup-password" placeholder="Choose a password" minlength="8" required>
+    <button type="submit">Set password</button>
+    <p class="error-text" id="setup-error"></p>
+  </form>
+</div>
+
+<div id="screen-login" class="center-screen" style="display:none;">
+  <form class="card" id="login-form">
+    <h1>Welcome back</h1>
+    <p class="hint">Enter your dashboard password to continue.</p>
+    <input type="password" id="login-password" placeholder="Password" required>
+    <button type="submit">Log in</button>
+    <p class="error-text" id="login-error"></p>
+  </form>
+</div>
+
+<div id="app">
+  <header class="top">
+    <h1 id="venue-name">Your Dashboard</h1>
+    <div class="period-select" id="period-select"></div>
+    <button class="secondary" style="width:auto;" id="settings-toggle">Settings</button>
+  </header>
+  <div class="banner" id="unverified-banner" style="display:none;">
+    Some numbers here haven't been checked against your own records yet. Keep an eye on the Connections panel below.
+  </div>
+  <main>
+    <div class="kpi-row" id="kpi-row"></div>
+    <div class="panels">
+      <div class="panel">
+        <h2>Connections</h2>
+        <div id="connections-body">Loading…</div>
+      </div>
+      <div class="panel" id="settings-panel" style="display:none;">
+        <h2>Settings</h2>
+        <label>Venue name</label>
+        <input type="text" id="set-venueName">
+        <div class="field-row">
+          <div>
+            <label>Week starts on</label>
+            <select id="set-weekStartDay">
+              <option value="1">Monday</option><option value="2">Tuesday</option>
+              <option value="3">Wednesday</option><option value="4">Thursday</option>
+              <option value="5">Friday</option><option value="6">Saturday</option>
+              <option value="0">Sunday</option>
+            </select>
+          </div>
+          <div>
+            <label>Default period</label>
+            <select id="set-defaultPeriod">
+              <option value="this_week">This week</option>
+              <option value="last_week">Last week</option>
+              <option value="this_month">This month</option>
+              <option value="last_month">Last month</option>
+              <option value="this_fy">This financial year</option>
+              <option value="last_fy">Last financial year</option>
+            </select>
+          </div>
+        </div>
+        <div class="field-row">
+          <div>
+            <label>Target Wage %</label>
+            <input type="number" id="set-targetWage" step="0.1" placeholder="e.g. 30">
+          </div>
+          <div>
+            <label>Target Cost of goods %</label>
+            <input type="number" id="set-targetCogs" step="0.1" placeholder="e.g. 30">
+          </div>
+        </div>
+        <label>Accent colour</label>
+        <input type="color" id="set-accentColour">
+        <button id="settings-save">Save settings</button>
+        <p class="muted-note">Trading-day rollover and timezone were set during the build — ask if these ever need to change.</p>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+const METRICS = [
+  { key: "revenue", label: "Revenue", format: "money", good: "up" },
+  { key: "transactions", label: "Transactions", format: "count", good: "up" },
+  { key: "averageCustomerSpend", label: "Average customer spend", format: "money", good: "up" },
+  { key: "costOfGoods", label: "Cost of goods", format: "money", good: "down", subKey: "costOfGoodsPct", subFormat: "percent" },
+  { key: "wagePct", label: "Wage %", format: "percent", good: "down" },
+  { key: "overheads", label: "Overheads", format: "money", good: "down" },
+  { key: "profit", label: "Profit", format: "money", good: "up", subKey: "profitPct", subFormat: "percent" },
+];
+
+const PERIODS = [
+  ["this_week", "This week"], ["last_week", "Last week"],
+  ["this_month", "This month"], ["last_month", "Last month"],
+  ["this_fy", "This FY"], ["last_fy", "Last FY"],
+];
+
+let currentPeriod = "this_week";
+
+function fmt(format, value) {
+  if (value === "not_configured") return "Not configured";
+  if (value === null || value === undefined) return "—";
+  if (format === "money") return new Intl.NumberFormat("en-AU", { style: "currency", currency: "AUD", maximumFractionDigits: 0 }).format(value);
+  if (format === "percent") return (value * 100).toFixed(1) + "%";
+  if (format === "count") return new Intl.NumberFormat("en-AU").format(value);
+  return String(value);
+}
+
+function deltaLine(label, d, goodDirection) {
+  if (!d) return `<span>${label}: —</span>`;
+  const isGood = goodDirection === "up" ? d.pct > 0 : d.pct < 0;
+  const cls = d.pct === 0 ? "" : (isGood ? "good" : "critical");
+  const arrow = d.pct > 0 ? "▲" : d.pct < 0 ? "▼" : "—";
+  return `<span class="${cls}">${arrow} ${(Math.abs(d.pct) * 100).toFixed(1)}% ${label}</span>`;
+}
+
+function sparkline(values) {
+  const pts = values.filter((v) => v !== null && v !== undefined);
+  if (pts.length < 2) return "";
+  const w = 100, h = 28, pad = 2;
+  const min = Math.min(...pts), max = Math.max(...pts);
+  const range = max - min || 1;
+  const step = (w - pad * 2) / (values.length - 1);
+  let x = 0;
+  const coords = values.map((v) => {
+    const px = pad + x * step;
+    x++;
+    if (v === null || v === undefined) return null;
+    const py = h - pad - ((v - min) / range) * (h - pad * 2);
+    return [px, py];
+  }).filter(Boolean);
+  const path = coords.map((c) => c.join(",")).join(" ");
+  return `<svg width="${w}" height="${h}" viewBox="0 0 ${w} ${h}"><polyline points="${path}" fill="none" stroke="var(--series-1)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
+}
+
+function renderPeriodButtons() {
+  const el = document.getElementById("period-select");
+  el.innerHTML = PERIODS.map(([key, label]) =>
+    `<button data-period="${key}" class="${key === currentPeriod ? "active" : ""}">${label}</button>`
+  ).join("");
+  el.querySelectorAll("button").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      currentPeriod = btn.dataset.period;
+      renderPeriodButtons();
+      loadData();
+    });
+  });
+}
+
+async function api(path, opts) {
+  const res = await fetch(path, { ...opts, headers: { "Content-Type": "application/json", ...(opts && opts.headers) } });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `request failed (${res.status})`);
+  }
+  return res.json();
+}
+
+async function loadData() {
+  const data = await api(`/api/data?period=${currentPeriod}`);
+  document.getElementById("unverified-banner").style.display = data.unverified ? "block" : "none";
+  const row = document.getElementById("kpi-row");
+  row.innerHTML = METRICS.map((m) => {
+    const d = data.metrics[m.key];
+    const sub = m.subKey ? `<div class="sub">${fmt(m.subFormat, data.metrics[m.subKey] ? data.metrics[m.subKey].value : null)}</div>` : "";
+    return `<div class="tile">
+      <div class="label">${m.label}</div>
+      <div class="value">${fmt(m.format, d.value)}</div>
+      ${sub}
+      <div class="deltas">
+        ${deltaLine("vs last period", d.vsPrevious, m.good)}
+        ${deltaLine("vs last year", d.vsLastYear, m.good)}
+      </div>
+      ${sparkline(d.trend || [])}
+    </div>`;
+  }).join("");
+}
+
+async function loadConnections() {
+  const c = await api("/api/connections");
+  document.getElementById("connections-body").innerHTML = `
+    <div class="conn-row">
+      <span><span class="dot ${c.xero.connected ? "on" : "off"}"></span>Xero ${c.xero.connected ? "— " + (c.xero.tenantName || "connected") : "— not connected"}</span>
+      ${c.xero.connected ? "" : '<a class="link-btn" href="/api/oauth/xero/start">Connect</a>'}
+    </div>
+    <div class="conn-row">
+      <span><span class="dot ${c.square.connected ? "on" : "off"}"></span>Square ${c.square.connected ? "— connected" : "— not connected"}</span>
+    </div>
+  `;
+}
+
+async function loadSettings() {
+  const s = await api("/api/settings");
+  document.getElementById("venue-name").textContent = s.venueName || "Your Dashboard";
+  document.getElementById("set-venueName").value = s.venueName || "";
+  document.getElementById("set-weekStartDay").value = String(s.weekStartDay);
+  document.getElementById("set-defaultPeriod").value = s.defaultPeriod;
+  document.getElementById("set-accentColour").value = s.accentColour || "#2a78d6";
+  document.getElementById("set-targetWage").value = s.targets && s.targets.wagePct != null ? s.targets.wagePct * 100 : "";
+  document.getElementById("set-targetCogs").value = s.targets && s.targets.costOfGoodsPct != null ? s.targets.costOfGoodsPct * 100 : "";
+  document.documentElement.style.setProperty("--accent", s.accentColour || "#2a78d6");
+}
+
+document.getElementById("settings-toggle").addEventListener("click", () => {
+  const p = document.getElementById("settings-panel");
+  p.style.display = p.style.display === "none" ? "block" : "none";
+});
+
+document.getElementById("settings-save").addEventListener("click", async () => {
+  const wage = document.getElementById("set-targetWage").value;
+  const cogs = document.getElementById("set-targetCogs").value;
+  await api("/api/settings", {
+    method: "POST",
+    body: JSON.stringify({
+      venueName: document.getElementById("set-venueName").value,
+      weekStartDay: Number(document.getElementById("set-weekStartDay").value),
+      defaultPeriod: document.getElementById("set-defaultPeriod").value,
+      accentColour: document.getElementById("set-accentColour").value,
+      targets: {
+        wagePct: wage ? Number(wage) / 100 : undefined,
+        costOfGoodsPct: cogs ? Number(cogs) / 100 : undefined,
+      },
+    }),
+  });
+  await loadSettings();
+  await loadData();
+});
+
+async function boot() {
+  const params = new URLSearchParams(location.search);
+  if (params.get("refresh") === "1") { /* cache-buster only, no-op */ }
+
+  const session = await api("/api/session");
+  if (!session.hasPassword) {
+    document.getElementById("screen-setup").style.display = "flex";
+    document.getElementById("setup-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      try {
+        await api("/api/setup-password", { method: "POST", body: JSON.stringify({ password: document.getElementById("setup-password").value }) });
+        location.reload();
+      } catch (err) {
+        document.getElementById("setup-error").textContent = err.message;
+      }
+    });
+    return;
+  }
+  if (!session.loggedIn) {
+    document.getElementById("screen-login").style.display = "flex";
+    document.getElementById("login-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      try {
+        await api("/api/login", { method: "POST", body: JSON.stringify({ password: document.getElementById("login-password").value }) });
+        location.reload();
+      } catch (err) {
+        document.getElementById("login-error").textContent = err.message;
+      }
+    });
+    return;
+  }
+
+  document.getElementById("app").style.display = "block";
+  await loadSettings();
+  currentPeriod = (await api("/api/settings")).defaultPeriod || "this_week";
+  renderPeriodButtons();
+  await Promise.all([loadData(), loadConnections()]);
+}
+
+boot();
+</script>
+</body>
+</html>

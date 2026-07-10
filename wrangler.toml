@@ -9,7 +9,11 @@ binding = "ASSETS"
 
 [[kv_namespaces]]
 binding = "TOKENS"
-id = "REPLACE_AFTER_FIRST_DEPLOY"
+# No id here on purpose: Cloudflare auto-provisions this namespace on first
+# deploy (wrangler >=4.45) and writes the id back into this file. Once that
+# first deploy succeeds, pin it — read the id from Cloudflare (Storage &
+# Databases -> KV) and set it explicitly, so a later deploy can't orphan the
+# saved password by re-provisioning a fresh namespace.
 
 # Rung-2 fallback (scheduled pull of a provider export) — leave commented until
 # a source actually needs it, per capability-matrix.md.

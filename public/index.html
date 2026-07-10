@@ -118,10 +118,40 @@
   .tile .deltas .good { color: var(--good); font-weight: 600; }
   .tile .deltas .critical { color: var(--critical); font-weight: 600; }
   .tile svg { display: block; margin-top: 8px; }
+  .tile.status-warning { border-color: var(--warning); border-width: 1.5px; }
+  .tile.status-critical { border-color: var(--critical); border-width: 1.5px; }
+  .hero-cols { display: grid; grid-template-columns: 2fr 1fr; gap: 14px; margin-bottom: 14px; }
+  @media (max-width: 720px) { .hero-cols { grid-template-columns: 1fr; } }
+  .hero-tile {
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 14px;
+    padding: 22px 26px; display: flex; flex-direction: column; justify-content: center;
+  }
+  .hero-tile.status-good { border-color: var(--good); border-width: 1.5px; }
+  .hero-tile.status-warning { border-color: var(--warning); border-width: 1.5px; }
+  .hero-tile.status-critical { border-color: var(--critical); border-width: 1.5px; }
+  .hero-tile .hero-label { font-size: 13px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 8px; }
+  .hero-tile .hero-value { font-size: 40px; font-weight: 700; line-height: 1.1; }
+  .hero-tile .hero-deltas { font-size: 14px; color: var(--text-secondary); margin-top: 10px; }
+  .hero-tile .hero-deltas .good { color: var(--good); font-weight: 600; }
+  .hero-tile .hero-deltas .critical { color: var(--critical); font-weight: 600; }
+  .context-box {
+    background: var(--surface-1); border: 1px solid var(--border); border-radius: 14px;
+    padding: 18px 20px; display: flex; flex-direction: column; justify-content: center;
+    font-size: 14px; color: var(--text-secondary);
+  }
+  .context-box .verified { color: var(--good); font-weight: 600; }
+  .context-box .unverified { color: var(--warning); font-weight: 600; }
   .panels { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
   @media (max-width: 720px) { .panels { grid-template-columns: 1fr; } }
+  .panels.why-action { margin-bottom: 28px; }
   .panel { background: var(--surface-1); border: 1px solid var(--border); border-radius: 12px; padding: 20px; }
   .panel h2 { font-size: 15px; margin: 0 0 14px; }
+  #why-body p { margin: 0 0 10px; font-size: 14px; line-height: 1.5; color: var(--text-primary); }
+  #why-body p:last-child { margin-bottom: 0; }
+  .dot-item { display: flex; gap: 8px; align-items: flex-start; margin-bottom: 10px; font-size: 14px; line-height: 1.45; }
+  .dot-item:last-child { margin-bottom: 0; }
+  .dot-item .sev-dot { flex: none; width: 8px; height: 8px; border-radius: 50%; margin-top: 6px; }
+  .empty-note { color: var(--text-muted); font-size: 14px; margin: 0; }
   .conn-row { display: flex; align-items: center; justify-content: space-between; padding: 10px 0; border-bottom: 1px solid var(--gridline); }
   .conn-row:last-child { border-bottom: none; }
   .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 8px; }
@@ -164,7 +194,18 @@
     Some numbers here haven't been checked against your own records yet. Keep an eye on the Connections panel below.
   </div>
   <main>
+    <div class="hero-cols" id="hero-row"></div>
     <div class="kpi-row" id="kpi-row"></div>
+    <div class="panels why-action">
+      <div class="panel">
+        <h2>Why</h2>
+        <div id="why-body"></div>
+      </div>
+      <div class="panel">
+        <h2>What to do</h2>
+        <div id="action-body"></div>
+      </div>
+    </div>
     <div class="panels">
       <div class="panel">
         <h2>Connections</h2>
@@ -233,6 +274,7 @@ const PERIODS = [
 ];
 
 let currentPeriod = "this_week";
+let currentSettings = {};
 
 function fmt(format, value) {
   if (value === "not_configured") return "Not configured";
@@ -288,19 +330,187 @@ async function api(path, opts) {
   const res = await fetch(path, { ...opts, headers: { "Content-Type": "application/json", ...(opts && opts.headers) } });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.error || `request failed (${res.status})`);
+    throw new Error(body.detail ? `${body.error}: ${body.detail}` : (body.error || `request failed (${res.status})`));
   }
   return res.json();
+}
+
+// ---- Threshold / status helpers (Moderate layout — see design brainstorm) ----
+// Wage % and Cost of goods %: use the owner's own target if set, otherwise
+// fall back to the starting-point bands from the design doc (amber/red
+// bracket either side of a ~30% default).
+function wageStatus(value, target) {
+  if (value === "not_configured" || value === null || value === undefined) return "";
+  if (target != null) {
+    if (value > target + 0.02) return "critical";
+    if (value > target) return "warning";
+    return "good";
+  }
+  if (value > 0.32) return "critical";
+  if (value > 0.28) return "warning";
+  return "good";
+}
+function cogsStatus(value, target) {
+  if (value === "not_configured" || value === null || value === undefined) return "";
+  if (target != null) {
+    if (value > target + 0.03) return "critical";
+    if (value > target) return "warning";
+    return "good";
+  }
+  if (value > 0.33) return "critical";
+  if (value > 0.30) return "warning";
+  return "good";
+}
+// For week-on-week moves: flag only once a metric has moved enough to
+// matter, rather than colouring every tile every week (kept deliberately
+// "restrained" per the Moderate concept).
+function pctDeltaStatus(d, redThreshold, amberThreshold) {
+  if (!d || typeof d.pct !== "number") return "";
+  if (d.pct <= -redThreshold) return "critical";
+  if (d.pct <= -amberThreshold) return "warning";
+  return "";
+}
+function profitStatus(m) {
+  if (m.value === "not_configured" || m.value === null || m.value === undefined) return "";
+  if (m.value < 0) return "critical";
+  const t = (m.trend || []).filter((v) => v !== null && v !== undefined);
+  if (t.length >= 3) {
+    const n = t.length;
+    if (t[n - 1] < t[n - 2] && t[n - 2] < t[n - 3]) return "warning";
+  }
+  if (m.vsPrevious && m.vsPrevious.pct > 0) return "good";
+  return "";
+}
+function tileStatus(key, metrics) {
+  const targets = currentSettings.targets || {};
+  if (key === "wagePct") return wageStatus(metrics.wagePct.value, targets.wagePct);
+  if (key === "costOfGoods") return cogsStatus(metrics.costOfGoodsPct.value, targets.costOfGoodsPct);
+  if (key === "transactions") return pctDeltaStatus(metrics.transactions.vsPrevious, 0.10, 0.05);
+  if (key === "revenue") return pctDeltaStatus(metrics.revenue.vsPrevious, 0.10, 0.03);
+  if (key === "averageCustomerSpend") {
+    const d = metrics.averageCustomerSpend.vsPrevious;
+    return d && typeof d.pct === "number" && d.pct <= -0.05 ? "warning" : "";
+  }
+  return "";
+}
+
+function pctWord(pct) {
+  if (typeof pct !== "number" || Math.abs(pct) < 0.01) return "flat";
+  return (pct > 0 ? "up " : "down ") + (Math.abs(pct) * 100).toFixed(0) + "%";
+}
+
+function periodLabel() {
+  const found = PERIODS.find(([k]) => k === currentPeriod);
+  return found ? found[1] : "";
+}
+
+function formatDateRange(period, timezone) {
+  if (!period) return "";
+  const start = new Date(period.startUTC);
+  const end = new Date(period.endUTC - 24 * 60 * 60 * 1000); // endUTC is exclusive
+  const f = new Intl.DateTimeFormat("en-AU", { day: "numeric", month: "short", timeZone: timezone });
+  return `${f.format(start)} – ${f.format(end)}`;
+}
+
+// ---- "Why" panel: first-pass, rules-based diagnosis sentences ----
+function buildWhy(metrics) {
+  const out = [];
+  const rev = metrics.revenue, txn = metrics.transactions, acs = metrics.averageCustomerSpend;
+
+  if (rev.vsPrevious && txn.vsPrevious && acs.vsPrevious && Math.abs(rev.vsPrevious.pct) >= 0.03) {
+    const direction = rev.vsPrevious.pct > 0 ? "up" : "down";
+    const txnMoved = Math.abs(txn.vsPrevious.pct) >= 0.03;
+    const acsMoved = Math.abs(acs.vsPrevious.pct) >= 0.03;
+    if (txnMoved && !acsMoved) {
+      out.push(`Revenue is ${direction} and Transactions are <b>${pctWord(txn.vsPrevious.pct)}</b> — this reads as a footfall story, not a spend-per-head one.`);
+    } else if (!txnMoved && acsMoved) {
+      out.push(`Revenue is ${direction} but Transactions are <b>flat</b> — the move is coming from Average spend, which is <b>${pctWord(acs.vsPrevious.pct)}</b>.`);
+    } else if (txnMoved && acsMoved) {
+      out.push(`Both Transactions (<b>${pctWord(txn.vsPrevious.pct)}</b>) and Average spend (<b>${pctWord(acs.vsPrevious.pct)}</b>) moved this week — Revenue's ${direction} for more than one reason.`);
+    } else {
+      out.push(`Revenue is <b>${pctWord(rev.vsPrevious.pct)}</b> week-on-week, though neither Transactions nor Average spend moved much on their own — worth checking for a one-off (function, catering order) rather than a trend.`);
+    }
+  }
+
+  const targets = currentSettings.targets || {};
+  const wageSt = wageStatus(metrics.wagePct.value, targets.wagePct);
+  const cogsSt = cogsStatus(metrics.costOfGoodsPct.value, targets.costOfGoodsPct);
+  if (wageSt === "critical" || wageSt === "warning") {
+    out.push(`Wage % is <b>${fmt("percent", metrics.wagePct.value)}</b>${targets.wagePct != null ? `, above your ${fmt("percent", targets.wagePct)} target` : ""} — labour cost is running ahead of sales this period.`);
+  }
+  if (cogsSt === "critical" || cogsSt === "warning") {
+    out.push(`Cost of goods is <b>${fmt("percent", metrics.costOfGoodsPct.value)}</b>${targets.costOfGoodsPct != null ? `, above your ${fmt("percent", targets.costOfGoodsPct)} target` : ""} of revenue this period.`);
+  }
+
+  if (out.length === 0) out.push("Nothing moved enough this period to flag — steady as she goes.");
+  return out.slice(0, 3);
+}
+
+// ---- Ranked action list: max 3, most severe first ----
+function buildActions(metrics) {
+  const targets = currentSettings.targets || {};
+  const actions = [];
+
+  const wageSt = wageStatus(metrics.wagePct.value, targets.wagePct);
+  if (wageSt === "critical" || wageSt === "warning") {
+    actions.push({ sev: wageSt, text: `Wage % is ${fmt("percent", metrics.wagePct.value)}${targets.wagePct != null ? ` vs your ${fmt("percent", targets.wagePct)} target` : ""} — check this week's roster against covers before next week's is set.` });
+  }
+  const cogsSt = cogsStatus(metrics.costOfGoodsPct.value, targets.costOfGoodsPct);
+  if (cogsSt === "critical" || cogsSt === "warning") {
+    actions.push({ sev: cogsSt, text: `Cost of goods is ${fmt("percent", metrics.costOfGoodsPct.value)}${targets.costOfGoodsPct != null ? ` vs your ${fmt("percent", targets.costOfGoodsPct)} target` : ""} — check supplier pricing or portion sizes.` });
+  }
+  if (metrics.profit.value !== "not_configured" && metrics.profit.value !== null && metrics.profit.value < 0) {
+    actions.push({ sev: "critical", text: `Profit is negative this period — costs outpaced revenue. Worth a closer look before next week.` });
+  }
+  const txnSt = pctDeltaStatus(metrics.transactions.vsPrevious, 0.10, 0.05);
+  if (txnSt) {
+    actions.push({ sev: txnSt, text: `Transactions are ${pctWord(metrics.transactions.vsPrevious.pct)} vs last week — worth a footfall check (marketing, weather, local events).` });
+  }
+  const acsD = metrics.averageCustomerSpend.vsPrevious;
+  if (acsD && typeof acsD.pct === "number" && acsD.pct <= -0.05) {
+    actions.push({ sev: "warning", text: `Average spend is ${pctWord(acsD.pct)} vs last week — revisit upsell prompts at the till.` });
+  }
+
+  actions.sort((a, b) => (a.sev === "critical" ? 0 : 1) - (b.sev === "critical" ? 0 : 1));
+  return actions.slice(0, 3);
+}
+
+function renderHero(metrics, period, sources, unverified) {
+  const m = metrics.profit;
+  const notConfigured = m.value === "not_configured" || m.value === null || m.value === undefined;
+  const status = notConfigured ? "" : profitStatus(m);
+  const pctVal = metrics.profitPct && metrics.profitPct.value;
+  const sub = !notConfigured && typeof pctVal === "number" ? ` (${fmt("percent", pctVal)})` : "";
+  const deltaParts = [];
+  if (m.vsPrevious) deltaParts.push(`<span class="${m.vsPrevious.pct > 0 ? "good" : m.vsPrevious.pct < 0 ? "critical" : ""}">${m.vsPrevious.pct >= 0 ? "▲" : "▼"} ${(Math.abs(m.vsPrevious.pct) * 100).toFixed(1)}% vs last period</span>`);
+  if (m.vsLastYear) deltaParts.push(`<span class="${m.vsLastYear.pct > 0 ? "good" : m.vsLastYear.pct < 0 ? "critical" : ""}">${m.vsLastYear.pct >= 0 ? "▲" : "▼"} ${(Math.abs(m.vsLastYear.pct) * 100).toFixed(1)}% vs last year</span>`);
+
+  document.getElementById("hero-row").innerHTML = `
+    <div class="hero-tile ${status ? "status-" + status : ""}">
+      <div class="hero-label">Profit — ${periodLabel()}</div>
+      <div class="hero-value">${fmt("money", m.value)}${sub}</div>
+      <div class="hero-deltas">${deltaParts.join(" &nbsp;·&nbsp; ") || "—"}</div>
+    </div>
+    <div class="context-box">
+      <div>${formatDateRange(period, currentSettings.timezone)}</div>
+      <div class="${unverified ? "unverified" : "verified"}">${unverified ? "● not all sources verified" : "● all sources verified"}</div>
+    </div>`;
 }
 
 async function loadData() {
   const data = await api(`/api/data?period=${currentPeriod}`);
   document.getElementById("unverified-banner").style.display = data.unverified ? "block" : "none";
+  const metrics = data.metrics;
+
+  renderHero(metrics, data.period, data.sources, data.unverified);
+
+  const kpiMetrics = METRICS.filter((m) => m.key !== "profit");
   const row = document.getElementById("kpi-row");
-  row.innerHTML = METRICS.map((m) => {
-    const d = data.metrics[m.key];
-    const sub = m.subKey ? `<div class="sub">${fmt(m.subFormat, data.metrics[m.subKey] ? data.metrics[m.subKey].value : null)}</div>` : "";
-    return `<div class="tile">
+  row.innerHTML = kpiMetrics.map((m) => {
+    const d = metrics[m.key];
+    const sub = m.subKey ? `<div class="sub">${fmt(m.subFormat, metrics[m.subKey] ? metrics[m.subKey].value : null)}</div>` : "";
+    const status = tileStatus(m.key, metrics);
+    return `<div class="tile ${status ? "status-" + status : ""}">
       <div class="label">${m.label}</div>
       <div class="value">${fmt(m.format, d.value)}</div>
       ${sub}
@@ -311,6 +521,14 @@ async function loadData() {
       ${sparkline(d.trend || [])}
     </div>`;
   }).join("");
+
+  document.getElementById("why-body").innerHTML = buildWhy(metrics).map((s) => `<p>${s}</p>`).join("");
+
+  const actions = buildActions(metrics);
+  const actionBody = document.getElementById("action-body");
+  actionBody.innerHTML = actions.length === 0
+    ? `<p class="empty-note">Nothing needs action this period — all metrics are within range.</p>`
+    : actions.map((a, i) => `<div class="dot-item"><span class="sev-dot" style="background:var(--${a.sev})"></span><span>${i + 1}. ${a.text}</span></div>`).join("");
 }
 
 async function loadConnections() {
@@ -328,6 +546,7 @@ async function loadConnections() {
 
 async function loadSettings() {
   const s = await api("/api/settings");
+  currentSettings = s;
   document.getElementById("venue-name").textContent = s.venueName || "Your Dashboard";
   document.getElementById("set-venueName").value = s.venueName || "";
   document.getElementById("set-weekStartDay").value = String(s.weekStartDay);

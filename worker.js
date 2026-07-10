@@ -75,11 +75,20 @@ async function pullXeroForPeriod(env, kv, period, settings) {
   return xeroAdapter.parseProfitAndLoss(report);
 }
 
-async function pullSquareForPeriod(env, period) {
+/** Resolved once per /api/data request and threaded through every Square
+ * call below — re-listing locations per period was burning subrequests for
+ * nothing (see the "too many subrequests" incident: fetching the full
+ * current period AND 6 trend buckets AND re-listing locations 9 times each
+ * pushed a single request past Cloudflare's per-invocation subrequest cap). */
+async function resolveSquareLocationIds(env) {
   if (!env.SQUARE_ACCESS_TOKEN) return null;
-  const locationIds = env.SQUARE_LOCATION_IDS
-    ? env.SQUARE_LOCATION_IDS.split(",").map((s) => s.trim())
-    : (await squareAdapter.listLocations(env.SQUARE_ACCESS_TOKEN)).map((l) => l.id);
+  if (env.SQUARE_LOCATION_IDS) return env.SQUARE_LOCATION_IDS.split(",").map((s) => s.trim());
+  const locs = await squareAdapter.listLocations(env.SQUARE_ACCESS_TOKEN);
+  return locs.map((l) => l.id);
+}
+
+async function pullSquareForPeriod(env, period, locationIds) {
+  if (!env.SQUARE_ACCESS_TOKEN || !locationIds) return null;
   return squareAdapter.countTransactions(
     env.SQUARE_ACCESS_TOKEN,
     locationIds,
@@ -88,29 +97,46 @@ async function pullSquareForPeriod(env, period) {
   );
 }
 
-async function metricsForPeriod(env, kv, period, settings) {
+/** Raw (unmerged) Xero + Square pulls for one period — kept separate from
+ * computeMetrics so callers can sum raw numbers across buckets before
+ * deriving percentages (summing percentages directly would be wrong). */
+async function rawForPeriod(env, kv, period, settings, locationIds) {
   const [xero, square] = await Promise.all([
     pullXeroForPeriod(env, kv, period, settings),
-    pullSquareForPeriod(env, period),
+    pullSquareForPeriod(env, period, locationIds),
   ]);
-  return computeMetrics(xero, square);
+  return { xero, square };
 }
 
-/** Split a period into N equal-width buckets and pull metrics for each, for
- * the trend line every metric shows (kpi-spec.md). Approximate (equal-width
- * time slices, not calendar-aware) — good enough for a sparkline. */
-async function trendForPeriod(env, kv, period, settings, buckets = 6) {
-  const step = Math.floor((period.endUTC - period.startUTC) / buckets);
-  const slices = Array.from({ length: buckets }, (_, i) => ({
+function sumXero(list) {
+  const present = list.filter(Boolean);
+  if (!present.length) return null;
+  const sum = (field) => present.reduce((s, x) => s + (x[field] || 0), 0);
+  return {
+    revenue: sum("revenue"),
+    costOfSales: sum("costOfSales"),
+    wagesAndSuper: sum("wagesAndSuper"),
+    overheads: sum("overheads"),
+  };
+}
+
+function sumSquare(list) {
+  const present = list.filter((v) => v !== null && v !== undefined);
+  if (!present.length) return null;
+  return present.reduce((s, v) => s + v, 0);
+}
+
+/** Split a period into N equal-width buckets and pull raw data for each —
+ * ONE fetch per bucket, reused both to derive the current-period total (by
+ * summing) and the trend sparkline (per-bucket), instead of fetching the
+ * whole period a second time. Approximate (equal-width time slices, not
+ * calendar-aware) — good enough for a sparkline. */
+function makeBuckets(period, count) {
+  const step = Math.floor((period.endUTC - period.startUTC) / count);
+  return Array.from({ length: count }, (_, i) => ({
     startUTC: period.startUTC + i * step,
-    endUTC: i === buckets - 1 ? period.endUTC : period.startUTC + (i + 1) * step,
+    endUTC: i === count - 1 ? period.endUTC : period.startUTC + (i + 1) * step,
   }));
-  const results = await Promise.all(slices.map((s) => metricsForPeriod(env, kv, s, settings)));
-  const byMetric = {};
-  for (const key of Object.keys(results[0] || {})) {
-    byMetric[key] = results.map((r) => (typeof r[key] === "number" ? r[key] : null));
-  }
-  return byMetric;
 }
 
 async function handleApi(request, env, ctx, url) {
@@ -220,20 +246,32 @@ async function handleApi(request, env, ctx, url) {
     const period = resolvePeriod(periodKey, settings, Date.now(), custom);
     const previous = previousPeriodOf(period);
     const lastYear = sameLastYearOf(periodKey, settings, Date.now(), custom);
+    const locationIds = await resolveSquareLocationIds(env);
 
-    const [current, prev, ly, trend] = await Promise.all([
-      metricsForPeriod(env, kv, period, settings),
-      metricsForPeriod(env, kv, previous, settings),
-      metricsForPeriod(env, kv, lastYear, settings),
-      trendForPeriod(env, kv, period, settings),
+    // One fetch per trend bucket, then sum those raw numbers for the current
+    // period's totals — NOT a separate full-period fetch on top (that
+    // redundant fetch, times 9 periods, is what blew the subrequest limit).
+    const buckets = makeBuckets(period, 6);
+    const [bucketRaws, prevRaw, lyRaw] = await Promise.all([
+      Promise.all(buckets.map((b) => rawForPeriod(env, kv, b, settings, locationIds))),
+      rawForPeriod(env, kv, previous, settings, locationIds),
+      rawForPeriod(env, kv, lastYear, settings, locationIds),
     ]);
+
+    const current = computeMetrics(
+      sumXero(bucketRaws.map((b) => b.xero)),
+      sumSquare(bucketRaws.map((b) => b.square))
+    );
+    const prev = computeMetrics(prevRaw.xero, prevRaw.square);
+    const ly = computeMetrics(lyRaw.xero, lyRaw.square);
+    const bucketMetrics = bucketRaws.map((b) => computeMetrics(b.xero, b.square));
 
     const xeroConnected = !!(await kv.get("xero:tokens"));
     const squareConnected = !!env.SQUARE_ACCESS_TOKEN;
 
     const metrics = withComparisons(current, prev, ly);
     for (const key of Object.keys(metrics)) {
-      metrics[key].trend = trend[key] || [];
+      metrics[key].trend = bucketMetrics.map((m) => (typeof m[key] === "number" ? m[key] : null));
     }
 
     return json({

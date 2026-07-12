@@ -350,20 +350,22 @@ async function handleApi(request, env, ctx, url) {
     if (orgId) {
       const end = new Date();
       const start = new Date(end.getTime() - 7 * 24 * 60 * 60 * 1000);
-      const from = start.toISOString().slice(0, 10);
-      const to = end.toISOString().slice(0, 10);
+      const plainFrom = start.toISOString().slice(0, 10); // 2026-07-05
+      const plainTo = end.toISOString().slice(0, 10);
+      const dmyFrom = `${String(start.getUTCDate()).padStart(2, "0")}/${String(start.getUTCMonth() + 1).padStart(2, "0")}/${start.getUTCFullYear()}`;
+      const dmyTo = `${String(end.getUTCDate()).padStart(2, "0")}/${String(end.getUTCMonth() + 1).padStart(2, "0")}/${end.getUTCFullYear()}`;
 
-      // "from"/"to" returned "Invalid params" — Employment Hero doesn't
-      // publicly document this endpoint's query params, so try several
-      // plausible names in one pass instead of one guess per round trip.
+      // Confirmed last round: "from_date"/"to_date" ARE the right param
+      // names (got past the generic "Invalid params" into a more specific
+      // "Invalid from date" error) — so now it's just the date *format*
+      // that's wrong. Try several formats against those same two names.
       const paramSets = {
-        from_to: { from, to },
-        start_date_end_date: { start_date: from, end_date: to },
-        date_from_date_to: { date_from: from, date_to: to },
-        from_date_to_date: { from_date: from, to_date: to },
-        start_end: { start, end: to },
-        startDate_endDate: { startDate: from, endDate: to },
-        no_params: null,
+        plain_date: { from_date: plainFrom, to_date: plainTo },
+        iso_datetime: { from_date: start.toISOString(), to_date: end.toISOString() },
+        iso_datetime_no_ms: { from_date: start.toISOString().split(".")[0] + "Z", to_date: end.toISOString().split(".")[0] + "Z" },
+        epoch_seconds: { from_date: String(Math.floor(start.getTime() / 1000)), to_date: String(Math.floor(end.getTime() / 1000)) },
+        epoch_millis: { from_date: String(start.getTime()), to_date: String(end.getTime()) },
+        dmy_slash: { from_date: dmyFrom, to_date: dmyTo },
       };
 
       results.rosteredShiftsAttempts = {};

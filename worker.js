@@ -12,6 +12,14 @@
 //   SQUARE_LOCATION_IDS                  — comma-separated, optional (all
 //                                           locations if unset — confirm
 //                                           with the owner which to count)
+//   EMPLOYMENT_HERO_CLIENT_ID,
+//   EMPLOYMENT_HERO_CLIENT_SECRET        — optional, from the owner's
+//                                           Employment Hero developer app.
+//                                           Only wires the OAuth connection;
+//                                           see lib/employmenthero.js — the
+//                                           projected Wage % itself isn't
+//                                           computed yet (unverified data
+//                                           shape, see that file's header).
 //   INGEST_TOKEN                         — optional, protects the guided-
 //                                           upload fallback endpoint
 
@@ -20,6 +28,7 @@ import { resolvePeriod, previousPeriodOf, sameLastYearOf, toDateInputValue } fro
 import { computeMetrics, withComparisons } from "./lib/kpi.js";
 import * as xeroAdapter from "./lib/xero.js";
 import * as squareAdapter from "./lib/square.js";
+import * as ehAdapter from "./lib/employmenthero.js";
 
 const DEFAULT_SETTINGS = {
   venueName: "",
@@ -63,6 +72,27 @@ async function getValidXeroAccessToken(env, kv) {
   };
   await kv.put("xero:tokens", JSON.stringify(updated));
   return { accessToken: updated.accessToken, tenantId: updated.tenantId };
+}
+
+// Same shape as getValidXeroAccessToken. Employment Hero access tokens
+// expire after 15 minutes (confirmed against their partner-guides docs) —
+// refresh well before that with the same 60s safety margin used for Xero.
+async function getValidEmploymentHeroAccessToken(env, kv) {
+  const stored = await kv.get("eh:tokens", "json");
+  if (!stored) return null;
+  if (stored.accessTokenExpiry > Date.now() + 60_000) {
+    return { accessToken: stored.accessToken, organisationId: stored.organisationId };
+  }
+  const refreshed = await ehAdapter.refreshTokens(env, stored.refreshToken);
+  const updated = {
+    accessToken: refreshed.access_token,
+    refreshToken: refreshed.refresh_token,
+    accessTokenExpiry: Date.now() + refreshed.expires_in * 1000,
+    organisationId: stored.organisationId,
+    organisationName: stored.organisationName,
+  };
+  await kv.put("eh:tokens", JSON.stringify(updated));
+  return { accessToken: updated.accessToken, organisationId: updated.organisationId };
 }
 
 async function pullXeroForPeriod(env, kv, period, settings) {
@@ -193,6 +223,7 @@ async function handleApi(request, env, ctx, url) {
 
   if (path === "/api/connections" && request.method === "GET") {
     const xeroTokens = await kv.get("xero:tokens", "json");
+    const ehTokens = await kv.get("eh:tokens", "json");
     const square = env.SQUARE_ACCESS_TOKEN
       ? await squareAdapter
           .listLocations(env.SQUARE_ACCESS_TOKEN)
@@ -204,6 +235,9 @@ async function handleApi(request, env, ctx, url) {
         ? { connected: true, tenantName: xeroTokens.tenantName }
         : { connected: false },
       square,
+      employmentHero: ehTokens
+        ? { connected: true, organisationName: ehTokens.organisationName, note: "Connected — projected Wage % isn't wired up yet (see build notes)." }
+        : { connected: false },
     });
   }
 
@@ -233,6 +267,50 @@ async function handleApi(request, env, ctx, url) {
       })
     );
     return Response.redirect(`${url.origin}/?connected=xero`, 302);
+  }
+
+  if (path === "/api/oauth/employmenthero/start" && request.method === "GET") {
+    const redirectUri = `${url.origin}/api/oauth/employmenthero/callback`;
+    const state = crypto.randomUUID();
+    await kv.put(`eh:oauthstate:${state}`, "1", { expirationTtl: 600 });
+    return Response.redirect(ehAdapter.buildAuthorizeUrl(env, redirectUri, state), 302);
+  }
+
+  if (path === "/api/oauth/employmenthero/callback" && request.method === "GET") {
+    const code = url.searchParams.get("code");
+    const state = url.searchParams.get("state");
+    const validState = state && (await kv.get(`eh:oauthstate:${state}`));
+    if (!code || !validState) return json({ error: "invalid oauth callback" }, { status: 400 });
+    await kv.delete(`eh:oauthstate:${state}`);
+    const redirectUri = `${url.origin}/api/oauth/employmenthero/callback`;
+    const tokens = await ehAdapter.exchangeCode(env, code, redirectUri);
+    // Pick the first organisation, same "confirm it's their business" pattern
+    // as Xero's tenant lookup — the owner should verify this on the
+    // Connections panel before it's trusted for anything.
+    let organisationId = null, organisationName = null;
+    try {
+      const orgs = await ehAdapter.listOrganisations(tokens.access_token);
+      const first = Array.isArray(orgs) ? orgs[0] : orgs?.organisations?.[0];
+      organisationId = first?.id ?? null;
+      organisationName = first?.name ?? null;
+    } catch (e) {
+      // Organisation lookup shape is unverified (see lib/employmenthero.js) —
+      // don't fail the whole connection over it; the owner can still see
+      // "connected" on the Connections panel and we can fix the lookup once
+      // we've seen the real response.
+      console.error("employment hero organisation lookup failed", e);
+    }
+    await kv.put(
+      "eh:tokens",
+      JSON.stringify({
+        accessToken: tokens.access_token,
+        refreshToken: tokens.refresh_token,
+        accessTokenExpiry: Date.now() + tokens.expires_in * 1000,
+        organisationId,
+        organisationName,
+      })
+    );
+    return Response.redirect(`${url.origin}/?connected=employmenthero`, 302);
   }
 
   if (path === "/api/data" && request.method === "GET") {

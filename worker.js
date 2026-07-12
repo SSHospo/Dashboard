@@ -74,6 +74,18 @@ async function getValidXeroAccessToken(env, kv) {
   return { accessToken: updated.accessToken, tenantId: updated.tenantId };
 }
 
+// CONFIRMED (from a real response, 12 Jul 2026): GET /api/v1/organisations
+// returns { data: { items: [{ id, name, phone, country, logo_url }, ...],
+// item_per_page, page_index, total_pages, total_items } }. Some items can
+// have name: null (other businesses/roles this login can see, not
+// necessarily the owner's venue) — pick the one with a real name, since
+// that's the one that will actually match the owner's Xero org name.
+function pickEmploymentHeroOrg(orgsResponse) {
+  const items = orgsResponse?.data?.items || [];
+  const named = items.filter((o) => o?.name);
+  return named[0] || items[0] || null;
+}
+
 // Same shape as getValidXeroAccessToken. Employment Hero access tokens
 // expire after 15 minutes (confirmed against their partner-guides docs) —
 // refresh well before that with the same 60s safety margin used for Xero.
@@ -284,15 +296,15 @@ async function handleApi(request, env, ctx, url) {
     await kv.delete(`eh:oauthstate:${state}`);
     const redirectUri = `${url.origin}/api/oauth/employmenthero/callback`;
     const tokens = await ehAdapter.exchangeCode(env, code, redirectUri);
-    // Pick the first organisation, same "confirm it's their business" pattern
+    // Pick the named organisation, same "confirm it's their business" pattern
     // as Xero's tenant lookup — the owner should verify this on the
     // Connections panel before it's trusted for anything.
     let organisationId = null, organisationName = null;
     try {
       const orgs = await ehAdapter.listOrganisations(tokens.access_token);
-      const first = Array.isArray(orgs) ? orgs[0] : orgs?.organisations?.[0];
-      organisationId = first?.id ?? null;
-      organisationName = first?.name ?? null;
+      const picked = pickEmploymentHeroOrg(orgs);
+      organisationId = picked?.id ?? null;
+      organisationName = picked?.name ?? null;
     } catch (e) {
       // Organisation lookup shape is unverified (see lib/employmenthero.js) —
       // don't fail the whole connection over it; the owner can still see
@@ -332,8 +344,7 @@ async function handleApi(request, env, ctx, url) {
 
     const orgId =
       auth.organisationId ||
-      results.organisations?.data?.[0]?.id ||
-      results.organisations?.data?.organisations?.[0]?.id;
+      (results.organisations?.ok ? pickEmploymentHeroOrg(results.organisations.data)?.id : null);
     results.resolvedOrganisationId = orgId || null;
 
     if (orgId) {

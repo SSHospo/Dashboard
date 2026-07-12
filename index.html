@@ -1,0 +1,750 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Owner's Dashboard</title>
+<style>
+  :root{
+    --bg:#F7F3EC;
+    --card:#FFFFFF;
+    --ink:#17140F;
+    --muted:#8A8577;
+    --border:#E6E1D3;
+    --green:#2F6B4F;
+    --green-soft:#E6EFE9;
+    --red:#B5432E;
+    --red-soft:#FBEAE5;
+    --amber:#D9A441;
+    --amber-soft:#FBF3E1;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;
+    background:var(--bg);
+    color:var(--ink);
+    font-family:-apple-system,"Helvetica Neue",Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1240px;margin:0 auto;padding:32px 24px 80px;}
+  #app{display:none;}
+
+  /* login / setup screens */
+  .center-screen{min-height:100vh;display:flex;align-items:center;justify-content:center;padding:24px;}
+  .auth-card{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:32px;width:100%;max-width:380px;}
+  .auth-card h1{font-size:20px;margin:0 0 8px;font-weight:800;}
+  .auth-card p.hint{color:var(--muted);font-size:14px;margin:0 0 20px;}
+  .auth-card input[type="password"]{
+    width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:8px;
+    background:var(--bg);color:var(--ink);font-size:15px;margin-bottom:12px;font-family:inherit;
+  }
+  .auth-card button{
+    width:100%;padding:11px;border:none;border-radius:8px;background:var(--ink);
+    color:#fff;font-size:15px;font-weight:700;cursor:pointer;font-family:inherit;
+  }
+  .error-text{color:var(--red);font-size:14px;margin:8px 0 0;}
+
+  /* header */
+  header{margin-bottom:28px;}
+  .brand-row{display:flex;align-items:baseline;gap:16px;flex-wrap:wrap;justify-content:space-between;}
+  .brand-row .brand-left{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;}
+  h1{font-size:clamp(24px,3vw,32px);font-weight:800;letter-spacing:-0.01em;margin:0;}
+  .brand-row .sub{color:var(--muted);font-size:13px;}
+  .rule{width:44px;height:3px;background:var(--green);border:0;margin:10px 0 22px;}
+
+  #settings-toggle{
+    border:1px solid var(--border);background:transparent;color:var(--ink);font-size:13px;
+    padding:9px 18px;border-radius:999px;cursor:pointer;font-family:inherit;font-weight:600;
+  }
+
+  .period-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:8px;}
+  .period-row .eyebrow{font-size:10px;letter-spacing:.08em;color:var(--muted);font-weight:700;margin-right:2px;}
+  .period-row button{
+    border:1px solid var(--border);background:transparent;color:var(--muted);font-size:12px;
+    padding:6px 14px;border-radius:999px;cursor:pointer;font-family:inherit;
+  }
+  .period-row button.active{background:var(--ink);color:#fff;border-color:var(--ink);font-weight:600;}
+
+  .meta-row{display:flex;align-items:center;gap:14px;color:var(--muted);font-size:12px;margin:6px 0 24px;}
+  .meta-row button{
+    border:1px solid var(--border);background:#fff;border-radius:6px;
+    padding:5px 12px;font-size:11px;color:var(--ink);cursor:pointer;font-family:inherit;
+  }
+  .period-title{font-size:17px;font-weight:800;margin:4px 0 22px;}
+
+  .banner{
+    margin:0 0 20px;padding:10px 16px;border-radius:8px;background:var(--amber-soft);
+    border:1px solid var(--amber);color:var(--ink);font-size:14px;
+  }
+
+  /* grid */
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(320px,1fr));gap:18px;}
+  .grid + .grid{margin-top:18px;}
+
+  .card{
+    background:var(--card);border:1px solid var(--border);border-radius:10px;
+    padding:22px 22px 20px;display:flex;flex-direction:column;
+  }
+  .card.alert{border-color:var(--amber);border-width:2px;padding:21px 21px 19px;}
+  .card.alert.critical{border-color:var(--red);}
+  .card .eyebrow{font-size:10.5px;letter-spacing:.09em;color:var(--muted);font-weight:700;margin-bottom:10px;}
+
+  .figure-row{display:flex;align-items:baseline;gap:14px;flex-wrap:wrap;margin-bottom:10px;}
+  .figure{font-size:30px;font-weight:800;letter-spacing:-0.01em;font-variant-numeric:tabular-nums;}
+  .figure-sub{font-size:17px;font-weight:700;color:var(--ink);}
+  .figure-labels{display:flex;gap:18px;font-size:9px;color:var(--muted);letter-spacing:.06em;margin:-4px 0 12px;}
+
+  .progress-track{height:6px;background:var(--border);border-radius:4px;position:relative;margin-bottom:6px;}
+  .progress-fill{height:6px;border-radius:4px;}
+  .progress-fill.ok{background:var(--green);}
+  .progress-fill.over{background:var(--red);}
+  .progress-fill.neutral{background:var(--muted);}
+  .progress-tick{position:absolute;top:-3px;width:2px;height:12px;background:var(--ink);}
+  .target-line{font-size:11px;color:var(--muted);margin-bottom:14px;}
+  .target-line .status-ok{color:var(--green);font-weight:700;}
+  .target-line .status-over{color:var(--red);font-weight:700;}
+
+  .compare{display:flex;justify-content:space-between;font-size:12px;color:var(--muted);padding:4px 0;}
+  .compare span.delta{font-weight:700;}
+  .delta.up-good, .delta.down-good{color:var(--green);}
+  .delta.up-bad, .delta.down-bad{color:var(--red);}
+  .compare-block{border-top:1px solid var(--border);margin-top:2px;padding-top:8px;}
+
+  .trend-label{font-size:9px;letter-spacing:.05em;color:var(--muted);margin:14px 0 6px;}
+  .trend{display:flex;align-items:flex-end;gap:4px;height:38px;}
+  .trend .bar{flex:1;border-radius:2px 2px 0 0;background:var(--green);}
+  .trend .bar.bad{background:var(--red);}
+  .trend .bar.current{outline:1.5px solid var(--ink);outline-offset:-1.5px;}
+
+  .foot{border-top:1px solid var(--border);margin-top:14px;padding-top:12px;}
+  .source{font-size:11.5px;color:var(--muted);margin-bottom:8px;}
+  .drives{font-size:12px;line-height:1.45;}
+  .drives b{font-weight:700;}
+  .diag-row{font-size:12px;line-height:1.45;margin-bottom:6px;}
+  .diag-row:last-child{margin-bottom:0;}
+  .diag-row b{font-weight:700;}
+
+  /* connections + settings panels */
+  .panel-grid{margin-top:18px;}
+  .panel-grid .card h2{font-size:14px;margin:0 0 14px;font-weight:800;}
+  .conn-row{display:flex;align-items:center;justify-content:space-between;padding:10px 0;border-bottom:1px solid var(--border);}
+  .conn-row:last-child{border-bottom:none;}
+  .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:8px;}
+  .dot.on{background:var(--green);} .dot.off{background:var(--muted);}
+  a.link-btn{display:inline-block;padding:6px 12px;border-radius:6px;background:var(--ink);color:#fff;text-decoration:none;font-size:13px;font-weight:700;}
+  .field-row{display:grid;grid-template-columns:1fr 1fr;gap:10px;}
+  .card label{font-size:12px;color:var(--muted);display:block;margin-bottom:4px;}
+  .card input[type="text"], .card input[type="number"], .card select, .card input[type="color"]{
+    width:100%;padding:9px 11px;border:1px solid var(--border);border-radius:8px;
+    background:var(--bg);color:var(--ink);font-size:14px;margin-bottom:12px;font-family:inherit;
+  }
+  .card button#settings-save{
+    width:100%;padding:11px;border:none;border-radius:8px;background:var(--ink);
+    color:#fff;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit;
+  }
+  .muted-note{font-size:11.5px;color:var(--muted);margin-top:8px;}
+
+  footer.note{margin-top:34px;font-size:11px;color:var(--muted);}
+
+  @media (max-width:520px){
+    .wrap{padding:22px 16px 60px;}
+    .figure{font-size:26px;}
+  }
+</style>
+</head>
+<body>
+
+<div id="screen-setup" class="center-screen" style="display:none;">
+  <form class="auth-card" id="setup-form">
+    <h1>Set your dashboard password</h1>
+    <p class="hint">This is the password for opening your dashboard. Choose something only you and your team should know.</p>
+    <input type="password" id="setup-password" placeholder="Choose a password" minlength="8" required>
+    <button type="submit">Set password</button>
+    <p class="error-text" id="setup-error"></p>
+  </form>
+</div>
+
+<div id="screen-login" class="center-screen" style="display:none;">
+  <form class="auth-card" id="login-form">
+    <h1>Welcome back</h1>
+    <p class="hint">Enter your dashboard password to continue.</p>
+    <input type="password" id="login-password" placeholder="Password" required>
+    <button type="submit">Log in</button>
+    <p class="error-text" id="login-error"></p>
+  </form>
+</div>
+
+<div id="app">
+<div class="wrap">
+
+  <header>
+    <div class="brand-row">
+      <div class="brand-left">
+        <h1 id="brandName">Your Dashboard</h1>
+      </div>
+      <button id="settings-toggle">Settings</button>
+    </div>
+    <div class="sub">Your numbers &middot; ex-GST &middot; financial year 1 July to 30 June</div>
+    <hr class="rule">
+
+    <div class="period-row">
+      <span class="eyebrow">PERIOD</span>
+      <div id="period-select"></div>
+    </div>
+    <div class="meta-row">
+      <span id="updated-label">Updated &middot; updates when you open or refresh this page</span>
+      <button onclick="location.reload()">Refresh</button>
+    </div>
+    <div class="period-title" id="period-title"></div>
+    <div class="banner" id="unverified-banner" style="display:none;">
+      Some numbers here haven't been checked against your own records yet. Keep an eye on the Connections panel below.
+    </div>
+  </header>
+
+  <div id="cards-root"></div>
+
+  <div class="grid panel-grid">
+    <div class="card">
+      <h2>Connections</h2>
+      <div id="connections-body">Loading&hellip;</div>
+    </div>
+    <div class="card" id="settings-panel" style="display:none;">
+      <h2>Settings</h2>
+      <label>Venue name</label>
+      <input type="text" id="set-venueName">
+      <div class="field-row">
+        <div>
+          <label>Week starts on</label>
+          <select id="set-weekStartDay">
+            <option value="1">Monday</option><option value="2">Tuesday</option>
+            <option value="3">Wednesday</option><option value="4">Thursday</option>
+            <option value="5">Friday</option><option value="6">Saturday</option>
+            <option value="0">Sunday</option>
+          </select>
+        </div>
+        <div>
+          <label>Default period</label>
+          <select id="set-defaultPeriod">
+            <option value="this_week">This week</option>
+            <option value="last_week">Last week</option>
+            <option value="this_month">This month</option>
+            <option value="last_month">Last month</option>
+            <option value="this_fy">This financial year</option>
+            <option value="last_fy">Last financial year</option>
+          </select>
+        </div>
+      </div>
+      <div class="field-row">
+        <div>
+          <label>Target Wage %</label>
+          <input type="number" id="set-targetWage" step="0.1" placeholder="e.g. 30">
+        </div>
+        <div>
+          <label>Target Cost of goods %</label>
+          <input type="number" id="set-targetCogs" step="0.1" placeholder="e.g. 30">
+        </div>
+      </div>
+      <div class="field-row">
+        <div>
+          <label>Target Overheads %</label>
+          <input type="number" id="set-targetOverheads" step="0.1" placeholder="e.g. 13">
+        </div>
+        <div>
+          <label>Profit floor %</label>
+          <input type="number" id="set-targetProfitFloor" step="0.1" placeholder="e.g. 10">
+        </div>
+      </div>
+      <label>Accent colour</label>
+      <input type="color" id="set-accentColour">
+      <button id="settings-save">Save settings</button>
+      <p class="muted-note">Trading-day rollover and timezone were set during the build — ask if these ever need to change.</p>
+    </div>
+  </div>
+
+  <footer class="note">All figures ex-GST. Revenue, Cost of goods, Wage % and Overheads come from Xero. Number of transactions comes from Square.</footer>
+
+</div>
+</div>
+
+<script>
+const PERIODS = [
+  ["this_week", "This week"], ["last_week", "Last week"],
+  ["this_month", "This month"], ["last_month", "Last month"],
+  ["this_fy", "This FY"], ["last_fy", "Last FY"],
+];
+
+let currentPeriod = "this_week";
+let currentSettings = {};
+
+function fmt(format, value) {
+  if (value === "not_configured") return "Not configured";
+  if (value === null || value === undefined) return "—";
+  if (format === "money") return new Intl.NumberFormat("en-AU", { style: "currency", currency: "AUD", maximumFractionDigits: 0 }).format(value);
+  if (format === "percent") return (value * 100).toFixed(1) + "%";
+  if (format === "count") return new Intl.NumberFormat("en-AU").format(value);
+  return String(value);
+}
+
+function periodLabel() {
+  const found = PERIODS.find(([k]) => k === currentPeriod);
+  return found ? found[1] : "";
+}
+
+function formatDateRange(period, timezone) {
+  if (!period) return "";
+  const start = new Date(period.startUTC);
+  const end = new Date(period.endUTC - 24 * 60 * 60 * 1000); // endUTC is exclusive
+  const f = new Intl.DateTimeFormat("en-AU", { day: "numeric", month: "short", year: "numeric", timeZone: timezone });
+  return `${f.format(start)} to ${f.format(end)}`;
+}
+
+// ---- comparison rows ----
+// Relative-% comparisons, for metrics whose primary figure is a dollar amount or a count.
+function pctCompareRow(label, d, goodDirection) {
+  if (!d || typeof d.pct !== "number") return `<div class="compare"><span>${label}</span><span class="delta">—</span></div>`;
+  const isUp = d.pct > 0;
+  const isGood = goodDirection === "up" ? isUp : !isUp;
+  const dirClass = d.pct === 0 ? "" : (isUp ? "up" : "down") + "-" + (isGood ? "good" : "bad");
+  const arrow = d.pct > 0 ? "&#9650;" : d.pct < 0 ? "&#9660;" : "—";
+  return `<div class="compare"><span>${label}</span><span class="delta ${dirClass}">${arrow} ${(Math.abs(d.pct) * 100).toFixed(1)}%</span></div>`;
+}
+// Percentage-point comparisons, for metrics whose primary figure is already a % of revenue.
+function ptsCompareRow(label, d, goodDirection) {
+  if (!d || typeof d.abs !== "number") return `<div class="compare"><span>${label}</span><span class="delta">—</span></div>`;
+  const pts = d.abs * 100;
+  const isUp = pts > 0;
+  const isGood = goodDirection === "up" ? isUp : !isUp;
+  const dirClass = pts === 0 ? "" : (isUp ? "up" : "down") + "-" + (isGood ? "good" : "bad");
+  const arrow = pts > 0 ? "&#9650;" : pts < 0 ? "&#9660;" : "—";
+  return `<div class="compare"><span>${label}</span><span class="delta ${dirClass}">${arrow} ${Math.abs(pts).toFixed(1)} pts</span></div>`;
+}
+
+// ---- 6-bucket trend bar chart (Revenue, Transactions, Average customer spend) ----
+function trendBarsHtml(trend) {
+  const vals = (trend || []).filter((v) => typeof v === "number");
+  if (vals.length < 2) return `<div class="trend"></div>`;
+  const min = Math.min(...vals), max = Math.max(...vals);
+  const range = max - min || 1;
+  const n = trend.length;
+  const bars = trend.map((v, i) => {
+    if (typeof v !== "number") return `<div class="bar" style="height:4px"></div>`;
+    const heightPct = 15 + ((v - min) / range) * 80;
+    const isLast = i === n - 1;
+    const isDown = isLast && i > 0 && typeof trend[i - 1] === "number" && v < trend[i - 1];
+    const cls = ["bar"];
+    if (isDown) cls.push("bad");
+    if (isLast) cls.push("current");
+    return `<div class="${cls.join(" ")}" style="height:${heightPct.toFixed(0)}%"></div>`;
+  }).join("");
+  return `<div class="trend">${bars}</div>`;
+}
+
+// ---- target progress bar (Cost of goods, Wage %, Overheads, Profit) ----
+function progressCardHtml(value, target, ceilingBase, goodDirection) {
+  if (typeof value !== "number") {
+    return `<div class="progress-track"><div class="progress-fill neutral" style="width:0%"></div></div><div class="target-line">Not enough data yet</div>`;
+  }
+  const ceiling = Math.max(ceilingBase, (target || 0) * 1.3, Math.max(value, 0) * 1.15);
+  const widthPct = Math.max(2, Math.min(100, (Math.max(value, 0) / ceiling) * 100));
+  if (target == null) {
+    return `<div class="progress-track"><div class="progress-fill neutral" style="width:${widthPct.toFixed(1)}%"></div></div><div class="target-line">No target set &mdash; add one in Settings</div>`;
+  }
+  const tickPct = Math.max(0, Math.min(100, (target / ceiling) * 100));
+  const isOver = goodDirection === "down" ? value > target : value < target;
+  const fillClass = isOver ? "over" : "ok";
+  const statusClass = isOver ? "status-over" : "status-ok";
+  const statusWord = isOver ? (goodDirection === "down" ? "over target" : "below floor") : "on track";
+  const label = goodDirection === "down" ? "Target" : "Floor";
+  return `<div class="progress-track"><div class="progress-fill ${fillClass}" style="width:${widthPct.toFixed(1)}%"></div><div class="progress-tick" style="left:${tickPct.toFixed(1)}%"></div></div><div class="target-line">${label} ${fmt("percent", target)} &middot; <span class="${statusClass}">${statusWord}</span></div>`;
+}
+
+// ---- Per-card diagnosis: "What's happening / Why / What to do / Did it work" ----
+// Every line below is derived from real data already in the /api/data response —
+// nothing here is invented. Where the data genuinely can't say (e.g. Overheads'
+// exact driver), the line says so plainly rather than guessing.
+// Wage % / Cost of goods % status against the owner's own target (or a
+// starting-point default band if no target is set yet) — used both for the
+// card's alert border and for the diagnosis "what to do" line.
+function wageStatus(value, target) {
+  if (typeof value !== "number") return "";
+  if (target != null) {
+    if (value > target + 0.02) return "critical";
+    if (value > target) return "warning";
+    return "good";
+  }
+  if (value > 0.32) return "critical";
+  if (value > 0.28) return "warning";
+  return "good";
+}
+function cogsStatus(value, target) {
+  if (typeof value !== "number") return "";
+  if (target != null) {
+    if (value > target + 0.03) return "critical";
+    if (value > target) return "warning";
+    return "good";
+  }
+  if (value > 0.33) return "critical";
+  if (value > 0.30) return "warning";
+  return "good";
+}
+// Flags a week-on-week move only once it's big enough to matter, rather than
+// colouring every tile every week.
+function pctDeltaStatus(d, redThreshold, amberThreshold) {
+  if (!d || typeof d.pct !== "number") return "";
+  if (d.pct <= -redThreshold) return "critical";
+  if (d.pct <= -amberThreshold) return "warning";
+  return "";
+}
+
+const DIAG_LABELS = ["What's happening:", "Why:", "What to do:", "Did it work:"];
+
+function moveWord(d) {
+  if (!d || typeof d.pct !== "number") return "No comparison yet";
+  if (Math.abs(d.pct) < 0.01) return "Flat";
+  return (d.pct > 0 ? "Up " : "Down ") + (Math.abs(d.pct) * 100).toFixed(1) + "%";
+}
+function moveWordPts(d) {
+  if (!d || typeof d.abs !== "number") return "No comparison yet";
+  const pts = d.abs * 100;
+  if (Math.abs(pts) < 0.1) return "Flat";
+  return (pts > 0 ? "Up " : "Down ") + Math.abs(pts).toFixed(1) + " pts";
+}
+// Looks at the last 3 trend buckets to say whether the metric turned around,
+// kept improving, slipped back, or is still heading the wrong way.
+function trendRecovery(trend, goodDirection) {
+  const vals = (trend || []).filter((v) => typeof v === "number");
+  if (vals.length < 3) return "Not enough history yet to say";
+  const n = vals.length;
+  const lastMove = vals[n - 1] - vals[n - 2];
+  const prevMove = vals[n - 2] - vals[n - 3];
+  const lastGood = goodDirection === "up" ? lastMove > 0 : lastMove < 0;
+  const prevGood = goodDirection === "up" ? prevMove > 0 : prevMove < 0;
+  if (lastGood && !prevGood) return "Yes — turned around this period";
+  if (lastGood && prevGood) return "Yes — still improving";
+  if (!lastGood && prevGood) return "Not yet — slipped back after improving";
+  return "Not yet — still heading the wrong way";
+}
+
+function diagRevenue(m) {
+  const rev = m.revenue, txn = m.transactions, acs = m.averageCustomerSpend;
+  const what = `${moveWord(rev.vsPrevious)} vs last week — ${fmt("money", rev.value)}.`;
+  let why = "Not enough data yet to tell footfall from spend.";
+  if (rev.vsPrevious && txn.vsPrevious && acs.vsPrevious) {
+    const txnMoved = Math.abs(txn.vsPrevious.pct) >= 0.03, acsMoved = Math.abs(acs.vsPrevious.pct) >= 0.03;
+    if (txnMoved && !acsMoved) why = `Volume did it — Transactions ${moveWord(txn.vsPrevious).toLowerCase()}, spend per head steady.`;
+    else if (!txnMoved && acsMoved) why = `Spend per head did it — Transactions flat, Average spend ${moveWord(acs.vsPrevious).toLowerCase()}.`;
+    else if (txnMoved && acsMoved) why = `Both moved — Transactions ${moveWord(txn.vsPrevious).toLowerCase()}, Average spend ${moveWord(acs.vsPrevious).toLowerCase()}.`;
+    else why = "Neither lever moved much — check for a one-off (function, catering order).";
+  }
+  const status = pctDeltaStatus(rev.vsPrevious, 0.10, 0.03);
+  const doText = status === "critical" ? "Check footfall drivers this week — marketing, weather, local events."
+    : status === "warning" ? "Keep watching — act if the dip continues next period."
+    : (rev.vsPrevious && rev.vsPrevious.pct > 0.03) ? "Keep doing what worked — watch if it repeats or was a one-off."
+    : "No action needed.";
+  return [what, why, doText, `${trendRecovery(rev.trend, "up")}.`];
+}
+
+function diagTransactions(m) {
+  const txn = m.transactions;
+  const what = `${moveWord(txn.vsPrevious)} vs last week — ${fmt("count", txn.value)}.`;
+  const why = !txn.vsPrevious ? "Not enough data yet to say what's driving footfall."
+    : Math.abs(txn.vsPrevious.pct) >= 0.03 ? "Footfall itself moved — this is a covers story, not a pricing one."
+    : "Footfall's steady — any Revenue move is coming from spend per head, not covers.";
+  const status = pctDeltaStatus(txn.vsPrevious, 0.10, 0.05);
+  const doText = status === "critical" ? "Worth investigating — marketing, local events, or a competitor change."
+    : status === "warning" ? "Keep an eye on footfall next period."
+    : "No action needed.";
+  return [what, why, doText, `${trendRecovery(txn.trend, "up")}.`];
+}
+
+function diagACS(m) {
+  const acs = m.averageCustomerSpend;
+  const what = `${moveWord(acs.vsPrevious)} vs last week — ${fmt("money", acs.value)}.`;
+  const why = !acs.vsPrevious ? "Not enough data yet to say what's moving spend per head."
+    : Math.abs(acs.vsPrevious.pct) >= 0.03 ? "Pricing, upsells or basket mix moved this — not footfall."
+    : "Spend per head is steady — nothing unusual here.";
+  const acsDown = acs.vsPrevious && typeof acs.vsPrevious.pct === "number" && acs.vsPrevious.pct <= -0.05;
+  const doText = acsDown ? "Revisit upsell prompts and specials at the till." : "No action needed.";
+  return [what, why, doText, `${trendRecovery(acs.trend, "up")}.`];
+}
+
+function diagCostOfGoods(m, targets) {
+  const cogsPct = m.costOfGoodsPct, cogsDollar = m.costOfGoods, rev = m.revenue;
+  const what = `${moveWordPts(cogsPct.vsPrevious)} vs last week — ${fmt("percent", cogsPct.value)} of revenue.`;
+  const why = (!cogsDollar.vsPrevious || !rev.vsPrevious) ? "Not enough data yet to separate volume from margin."
+    : Math.abs(cogsDollar.vsPrevious.pct - rev.vsPrevious.pct) < 0.03 ? "Cost is tracking revenue — looks like volume, not a margin problem."
+    : "Cost moved out of step with revenue — check supplier pricing, portioning or waste.";
+  const bad = cogsStatus(cogsPct.value, targets.costOfGoodsPct);
+  const doText = (bad === "critical" || bad === "warning") ? "Check supplier pricing, portion sizes and waste this week." : "No action needed.";
+  return [what, why, doText, `${trendRecovery(cogsPct.trend, "down")}.`];
+}
+
+function diagWage(m, targets) {
+  const wagePct = m.wagePct, wageDollar = m.wagesAndSuper, rev = m.revenue;
+  const what = `${moveWordPts(wagePct.vsPrevious)} vs last week — ${fmt("percent", wagePct.value)} of revenue.`;
+  const why = (!wageDollar.vsPrevious || !rev.vsPrevious) ? "Not enough data yet to say if it's roster or revenue driven."
+    : wageDollar.vsPrevious.pct > rev.vsPrevious.pct + 0.03 ? "Labour cost grew faster than revenue — rostered ahead of trade."
+    : "Labour is broadly tracking revenue.";
+  const bad = wageStatus(wagePct.value, targets.wagePct);
+  const doText = (bad === "critical" || bad === "warning") ? "Check this week's roster against covers before next week's is set." : "No action needed.";
+  return [what, why, doText, `${trendRecovery(wagePct.trend, "down")}.`];
+}
+
+function diagOverheads(m, overheadsPctNow, targets) {
+  const overheads = m.overheads;
+  const what = `${moveWord(overheads.vsPrevious)} vs last week — ${fmt("money", overheads.value)}.`;
+  const why = "Mostly fixed costs — rent, subscriptions, utilities and insurance, not tied to how busy you were.";
+  const overBad = overheadsPctNow !== null && targets.overheadsPct != null && overheadsPctNow > targets.overheadsPct;
+  const doText = overBad ? "Review subscriptions, utilities and any new recurring spend." : "No action needed.";
+  return [what, why, doText, `${trendRecovery(overheads.trend, "down")}.`];
+}
+
+async function api(path, opts) {
+  const res = await fetch(path, { ...opts, headers: { "Content-Type": "application/json", ...(opts && opts.headers) } });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.detail ? `${body.error}: ${body.detail}` : (body.error || `request failed (${res.status})`));
+  }
+  return res.json();
+}
+
+function renderPeriodButtons() {
+  const el = document.getElementById("period-select");
+  el.innerHTML = PERIODS.map(([key, label]) =>
+    `<button data-period="${key}" class="${key === currentPeriod ? "active" : ""}">${label}</button>`
+  ).join("");
+  el.querySelectorAll("button").forEach((btn) => {
+    btn.addEventListener("click", () => {
+      currentPeriod = btn.dataset.period;
+      renderPeriodButtons();
+      loadData();
+    });
+  });
+}
+
+function cardHtml({ eyebrow, alertClass, figureMain, figureSub, figureLabels, compareRows, extraRows, trendLabel, trendHtml, source, drives, diagnosis }) {
+  const footBody = diagnosis
+    ? diagnosis.map((line, i) => `<div class="diag-row"><b>${DIAG_LABELS[i]}</b> ${line}</div>`).join("")
+    : `<div class="drives"><b>Drives:</b> ${drives}</div>`;
+  return `<div class="card${alertClass ? " " + alertClass : ""}">
+    <div class="eyebrow">${eyebrow}</div>
+    <div class="figure-row"><span class="figure">${figureMain}</span>${figureSub ? `<span class="figure-sub">${figureSub}</span>` : ""}</div>
+    ${figureLabels ? `<div class="figure-labels">${figureLabels}</div>` : ""}
+    ${extraRows || ""}
+    <div class="${extraRows ? "compare-block" : ""}">${compareRows}</div>
+    ${trendHtml ? `<div class="trend-label">${trendLabel}</div>${trendHtml}` : ""}
+    <div class="foot">
+      <div class="source">${source}</div>
+      ${footBody}
+    </div>
+  </div>`;
+}
+
+function renderCards(metrics) {
+  const targets = currentSettings.targets || {};
+
+  // Row 1 — Revenue, Transactions, Average customer spend
+  const revenue = metrics.revenue, transactions = metrics.transactions, acs = metrics.averageCustomerSpend;
+  const row1 = `<div class="grid">
+    ${cardHtml({
+      eyebrow: "REVENUE",
+      figureMain: fmt("money", revenue.value),
+      compareRows: pctCompareRow("vs week before", revenue.vsPrevious, "up") + pctCompareRow("vs same week last year", revenue.vsLastYear, "up"),
+      trendLabel: "TREND &middot; RECENT PERIODS",
+      trendHtml: trendBarsHtml(revenue.trend),
+      source: "All trading income, ex-GST &middot; from Xero",
+      diagnosis: diagRevenue(metrics),
+    })}
+    ${cardHtml({
+      eyebrow: "NUMBER OF TRANSACTIONS",
+      figureMain: fmt("count", transactions.value),
+      compareRows: pctCompareRow("vs week before", transactions.vsPrevious, "up") + pctCompareRow("vs same week last year", transactions.vsLastYear, "up"),
+      trendLabel: "TREND &middot; RECENT PERIODS",
+      trendHtml: trendBarsHtml(transactions.trend),
+      source: "Completed transactions &middot; from Square",
+      diagnosis: diagTransactions(metrics),
+    })}
+    ${cardHtml({
+      eyebrow: "AVERAGE CUSTOMER SPEND",
+      figureMain: fmt("money", acs.value),
+      compareRows: pctCompareRow("vs week before", acs.vsPrevious, "up") + pctCompareRow("vs same week last year", acs.vsLastYear, "up"),
+      trendLabel: "TREND &middot; RECENT PERIODS",
+      trendHtml: trendBarsHtml(acs.trend),
+      source: "Revenue (Xero, ex-GST) &divide; transactions (Square)",
+      diagnosis: diagACS(metrics),
+    })}
+  </div>`;
+
+  // Row 2 — Cost of goods, Wage %, Overheads (target progress cards)
+  const cogsPct = metrics.costOfGoodsPct, wagePct = metrics.wagePct;
+  const overheadsVal = typeof metrics.overheads.value === "number" ? metrics.overheads.value : null;
+  const overheadsPctNow = overheadsVal !== null && typeof revenue.value === "number" && revenue.value !== 0 ? overheadsVal / revenue.value : null;
+
+  const wageStatusBad = typeof wagePct.value === "number" && targets.wagePct != null && wagePct.value > targets.wagePct;
+  const cogsStatusBad = typeof cogsPct.value === "number" && targets.costOfGoodsPct != null && cogsPct.value > targets.costOfGoodsPct;
+  const overheadsStatusBad = overheadsPctNow !== null && targets.overheadsPct != null && overheadsPctNow > targets.overheadsPct;
+
+  const row2 = `<div class="grid">
+    ${cardHtml({
+      eyebrow: "COST OF GOODS",
+      alertClass: cogsStatusBad ? "alert" : "",
+      figureMain: fmt("percent", cogsPct.value),
+      figureSub: fmt("money", metrics.costOfGoods.value),
+      figureLabels: "<span>OF REVENUE</span><span>DOLLARS</span>",
+      extraRows: progressCardHtml(typeof cogsPct.value === "number" ? cogsPct.value : null, targets.costOfGoodsPct, 0.45, "down"),
+      compareRows: ptsCompareRow("vs week before", cogsPct.vsPrevious, "down") + ptsCompareRow("vs same week last year", cogsPct.vsLastYear, "down"),
+      source: "Everything in your Cost of Sales accounts, ex-GST &middot; from Xero",
+      diagnosis: diagCostOfGoods(metrics, targets),
+    })}
+    ${cardHtml({
+      eyebrow: "WAGE %",
+      alertClass: wageStatusBad ? "alert critical" : "",
+      figureMain: fmt("percent", wagePct.value),
+      figureSub: fmt("money", metrics.wagesAndSuper.value),
+      figureLabels: "<span>OF REVENUE</span><span>DOLLARS</span>",
+      extraRows: progressCardHtml(typeof wagePct.value === "number" ? wagePct.value : null, targets.wagePct, 0.45, "down"),
+      compareRows: ptsCompareRow("vs week before", wagePct.vsPrevious, "down") + ptsCompareRow("vs same week last year", wagePct.vsLastYear, "down"),
+      source: "Wages plus super, as a share of revenue &middot; from Xero",
+      diagnosis: diagWage(metrics, targets),
+    })}
+    ${cardHtml({
+      eyebrow: "OVERHEADS",
+      alertClass: overheadsStatusBad ? "alert" : "",
+      figureMain: fmt("money", metrics.overheads.value),
+      figureSub: overheadsPctNow !== null ? fmt("percent", overheadsPctNow) + " of revenue" : "",
+      compareRows: pctCompareRow("vs week before", metrics.overheads.vsPrevious, "down") + pctCompareRow("vs same week last year", metrics.overheads.vsLastYear, "down"),
+      extraRows: progressCardHtml(overheadsPctNow, targets.overheadsPct, 0.25, "down"),
+      source: "Operating expenses excluding wages, super and cost of sales &middot; from Xero",
+      diagnosis: diagOverheads(metrics, overheadsPctNow, targets),
+    })}
+  </div>`;
+
+  // Row 3 — Profit (full width)
+  const profitPct = metrics.profitPct, profit = metrics.profit;
+  const profitBad = typeof profit.value === "number" && profit.value < 0;
+  const row3 = `<div class="grid" style="grid-template-columns:1fr;">
+    ${cardHtml({
+      eyebrow: "PROFIT",
+      alertClass: profitBad ? "alert critical" : "",
+      figureMain: fmt("percent", profitPct.value),
+      figureSub: fmt("money", profit.value),
+      figureLabels: "<span>OF REVENUE</span><span>DOLLARS</span>",
+      extraRows: progressCardHtml(typeof profitPct.value === "number" ? profitPct.value : null, targets.profitFloorPct, 0.35, "up"),
+      compareRows: ptsCompareRow("vs week before", profitPct.vsPrevious, "up") + ptsCompareRow("vs same week last year", profitPct.vsLastYear, "up"),
+      source: "Revenue minus Cost of goods, Wages and Overheads &middot; from Xero",
+      drives: "The number that actually matters. Below floor means one of the cards above needs attention.",
+    })}
+  </div>`;
+
+  document.getElementById("cards-root").innerHTML = row1 + row2 + row3;
+}
+
+async function loadData() {
+  const data = await api(`/api/data?period=${currentPeriod}`);
+  document.getElementById("unverified-banner").style.display = data.unverified ? "block" : "none";
+  document.getElementById("period-title").textContent = `${periodLabel()} · ${formatDateRange(data.period, currentSettings.timezone)}`;
+  document.getElementById("updated-label").textContent = `Updated ${new Date(data.lastSynced).toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit", timeZone: currentSettings.timezone })} · updates when you open or refresh this page`;
+  renderCards(data.metrics);
+}
+
+async function loadConnections() {
+  const c = await api("/api/connections");
+  document.getElementById("connections-body").innerHTML = `
+    <div class="conn-row">
+      <span><span class="dot ${c.xero.connected ? "on" : "off"}"></span>Xero ${c.xero.connected ? "— " + (c.xero.tenantName || "connected") : "— not connected"}</span>
+      ${c.xero.connected ? "" : '<a class="link-btn" href="/api/oauth/xero/start">Connect</a>'}
+    </div>
+    <div class="conn-row">
+      <span><span class="dot ${c.square.connected ? "on" : "off"}"></span>Square ${c.square.connected ? "— connected" : "— not connected"}</span>
+    </div>
+    <div class="conn-row">
+      <span><span class="dot ${c.employmentHero && c.employmentHero.connected ? "on" : "off"}"></span>Employment Hero (rostering) ${c.employmentHero && c.employmentHero.connected ? "— " + (c.employmentHero.organisationName || "connected") + " (projected Wage % not live yet)" : "— not connected"}</span>
+      ${c.employmentHero && c.employmentHero.connected ? "" : '<a class="link-btn" href="/api/oauth/employmenthero/start">Connect</a>'}
+    </div>
+  `;
+}
+
+async function loadSettings() {
+  const s = await api("/api/settings");
+  currentSettings = s;
+  document.getElementById("brandName").textContent = s.venueName || "Your Dashboard";
+  document.getElementById("set-venueName").value = s.venueName || "";
+  document.getElementById("set-weekStartDay").value = String(s.weekStartDay);
+  document.getElementById("set-defaultPeriod").value = s.defaultPeriod;
+  document.getElementById("set-accentColour").value = s.accentColour || "#2F6B4F";
+  document.getElementById("set-targetWage").value = s.targets && s.targets.wagePct != null ? s.targets.wagePct * 100 : "";
+  document.getElementById("set-targetCogs").value = s.targets && s.targets.costOfGoodsPct != null ? s.targets.costOfGoodsPct * 100 : "";
+  document.getElementById("set-targetOverheads").value = s.targets && s.targets.overheadsPct != null ? s.targets.overheadsPct * 100 : "";
+  document.getElementById("set-targetProfitFloor").value = s.targets && s.targets.profitFloorPct != null ? s.targets.profitFloorPct * 100 : "";
+  document.documentElement.style.setProperty("--green", s.accentColour || "#2F6B4F");
+}
+
+document.getElementById("settings-toggle").addEventListener("click", () => {
+  const p = document.getElementById("settings-panel");
+  p.style.display = p.style.display === "none" ? "flex" : "none";
+});
+
+document.getElementById("settings-save").addEventListener("click", async () => {
+  const wage = document.getElementById("set-targetWage").value;
+  const cogs = document.getElementById("set-targetCogs").value;
+  const overheads = document.getElementById("set-targetOverheads").value;
+  const profitFloor = document.getElementById("set-targetProfitFloor").value;
+  await api("/api/settings", {
+    method: "POST",
+    body: JSON.stringify({
+      venueName: document.getElementById("set-venueName").value,
+      weekStartDay: Number(document.getElementById("set-weekStartDay").value),
+      defaultPeriod: document.getElementById("set-defaultPeriod").value,
+      accentColour: document.getElementById("set-accentColour").value,
+      targets: {
+        wagePct: wage ? Number(wage) / 100 : undefined,
+        costOfGoodsPct: cogs ? Number(cogs) / 100 : undefined,
+        overheadsPct: overheads ? Number(overheads) / 100 : undefined,
+        profitFloorPct: profitFloor ? Number(profitFloor) / 100 : undefined,
+      },
+    }),
+  });
+  await loadSettings();
+  await loadData();
+});
+
+async function boot() {
+  const session = await api("/api/session");
+  if (!session.hasPassword) {
+    document.getElementById("screen-setup").style.display = "flex";
+    document.getElementById("setup-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      try {
+        await api("/api/setup-password", { method: "POST", body: JSON.stringify({ password: document.getElementById("setup-password").value }) });
+        location.reload();
+      } catch (err) {
+        document.getElementById("setup-error").textContent = err.message;
+      }
+    });
+    return;
+  }
+  if (!session.loggedIn) {
+    document.getElementById("screen-login").style.display = "flex";
+    document.getElementById("login-form").addEventListener("submit", async (e) => {
+      e.preventDefault();
+      try {
+        await api("/api/login", { method: "POST", body: JSON.stringify({ password: document.getElementById("login-password").value }) });
+        location.reload();
+      } catch (err) {
+        document.getElementById("login-error").textContent = err.message;
+      }
+    });
+    return;
+  }
+
+  document.getElementById("app").style.display = "block";
+  await loadSettings();
+  currentPeriod = (await api("/api/settings")).defaultPeriod || "this_week";
+  renderPeriodButtons();
+  await Promise.all([loadData(), loadConnections()]);
+}
+
+boot();
+</script>
+</body>
+</html>

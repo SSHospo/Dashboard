@@ -313,6 +313,52 @@ async function handleApi(request, env, ctx, url) {
     return Response.redirect(`${url.origin}/?connected=employmenthero`, 302);
   }
 
+  // TEMPORARY diagnostic route — not part of the finished build. Employment
+  // Hero's roster-data response shape isn't publicly documented (see
+  // lib/employmenthero.js's header comment), so this exists purely to look
+  // at one real response and finish fetchRosterCost() against it. Session-
+  // gated like everything else here; safe to leave in briefly, but remove
+  // once the real adapter is wired up.
+  if (path === "/api/debug/employmenthero" && request.method === "GET") {
+    const auth = await getValidEmploymentHeroAccessToken(env, kv);
+    if (!auth) return json({ error: "employment hero not connected" }, { status: 400 });
+
+    const results = {};
+
+    results.organisations = await ehAdapter
+      .listOrganisations(auth.accessToken)
+      .then((data) => ({ ok: true, data }))
+      .catch((e) => ({ ok: false, error: String(e) }));
+
+    const orgId =
+      auth.organisationId ||
+      results.organisations?.data?.[0]?.id ||
+      results.organisations?.data?.organisations?.[0]?.id;
+    results.resolvedOrganisationId = orgId || null;
+
+    if (orgId) {
+      const end = new Date();
+      const start = new Date(end.getTime() - 7 * 24 * 60 * 60 * 1000);
+      const rosterUrl = `https://api.employmenthero.com/api/v1/organisations/${orgId}/rostered_shifts?from=${start.toISOString().slice(0, 10)}&to=${end.toISOString().slice(0, 10)}`;
+      results.rosteredShifts = await fetch(rosterUrl, {
+        headers: { Authorization: `Bearer ${auth.accessToken}`, Accept: "application/json" },
+      })
+        .then(async (res) => {
+          const text = await res.text();
+          let data;
+          try {
+            data = JSON.parse(text);
+          } catch {
+            data = text;
+          }
+          return { ok: res.ok, status: res.status, url: rosterUrl, data };
+        })
+        .catch((e) => ({ ok: false, error: String(e), url: rosterUrl }));
+    }
+
+    return json(results);
+  }
+
   if (path === "/api/data" && request.method === "GET") {
     const settings = await getSettings(kv);
     const periodKey = url.searchParams.get("period") || settings.defaultPeriod;

@@ -347,50 +347,70 @@ async function handleApi(request, env, ctx, url) {
       (results.organisations?.ok ? pickEmploymentHeroOrg(results.organisations.data)?.id : null);
     results.resolvedOrganisationId = orgId || null;
 
+    async function ehGet(pathAndQuery) {
+      const testUrl = `https://api.employmenthero.com${pathAndQuery}`;
+      return fetch(testUrl, {
+        headers: { Authorization: `Bearer ${auth.accessToken}`, Accept: "application/json" },
+      })
+        .then(async (res) => {
+          const text = await res.text();
+          let data;
+          try {
+            data = JSON.parse(text);
+          } catch {
+            data = text;
+          }
+          return { ok: res.ok, status: res.status, url: testUrl, data };
+        })
+        .catch((e) => ({ ok: false, error: String(e), url: testUrl }));
+    }
+
     if (orgId) {
       const end = new Date();
       const start = new Date(end.getTime() - 7 * 24 * 60 * 60 * 1000);
-      const plainFrom = start.toISOString().slice(0, 10); // 2026-07-05
-      const plainTo = end.toISOString().slice(0, 10);
-      const dmyFrom = `${String(start.getUTCDate()).padStart(2, "0")}/${String(start.getUTCMonth() + 1).padStart(2, "0")}/${start.getUTCFullYear()}`;
-      const dmyTo = `${String(end.getUTCDate()).padStart(2, "0")}/${String(end.getUTCMonth() + 1).padStart(2, "0")}/${end.getUTCFullYear()}`;
+      // CONFIRMED last round: from_date/to_date as full ISO 8601 datetimes
+      // (with or without milliseconds) is the working combination.
+      const from = start.toISOString().split(".")[0] + "Z";
+      const to = end.toISOString().split(".")[0] + "Z";
+      const q = new URLSearchParams({ from_date: from, to_date: to }).toString();
 
-      // Confirmed last round: "from_date"/"to_date" ARE the right param
-      // names (got past the generic "Invalid params" into a more specific
-      // "Invalid from date" error) — so now it's just the date *format*
-      // that's wrong. Try several formats against those same two names.
-      const paramSets = {
-        plain_date: { from_date: plainFrom, to_date: plainTo },
-        iso_datetime: { from_date: start.toISOString(), to_date: end.toISOString() },
-        iso_datetime_no_ms: { from_date: start.toISOString().split(".")[0] + "Z", to_date: end.toISOString().split(".")[0] + "Z" },
-        epoch_seconds: { from_date: String(Math.floor(start.getTime() / 1000)), to_date: String(Math.floor(end.getTime() / 1000)) },
-        epoch_millis: { from_date: String(start.getTime()), to_date: String(end.getTime()) },
-        dmy_slash: { from_date: dmyFrom, to_date: dmyTo },
+      const baseline = await ehGet(`/api/v1/organisations/${orgId}/rostered_shifts?${q}`);
+      const items = baseline?.data?.data?.items || [];
+      results.rosteredShiftsBaseline = {
+        ok: baseline.ok,
+        status: baseline.status,
+        itemCount: items.length,
+        pagination: {
+          item_per_page: baseline?.data?.data?.item_per_page,
+          page_index: baseline?.data?.data?.page_index,
+          total_pages: baseline?.data?.data?.total_pages,
+          total_items: baseline?.data?.data?.total_items,
+        },
+        // Field names only from the first item, plus one full example — no
+        // cost/rate field observed on this object at all.
+        sampleItem: items[0] || null,
       };
 
-      results.rosteredShiftsAttempts = {};
-      for (const [label, params] of Object.entries(paramSets)) {
-        const base = `https://api.employmenthero.com/api/v1/organisations/${orgId}/rostered_shifts`;
-        const testUrl = params ? `${base}?${new URLSearchParams(params).toString()}` : base;
-        results.rosteredShiftsAttempts[label] = await fetch(testUrl, {
-          headers: { Authorization: `Bearer ${auth.accessToken}`, Accept: "application/json" },
-        })
-          .then(async (res) => {
-            const text = await res.text();
-            let data;
-            try {
-              data = JSON.parse(text);
-            } catch {
-              data = text;
-            }
-            // Truncate successful bulky responses so the debug page stays
-            // readable; failures are usually short already.
-            if (res.ok && typeof data === "object") {
-              data = JSON.stringify(data).slice(0, 2000);
-            }
-            return { ok: res.ok, status: res.status, url: testUrl, data };
-          })
-          .catch((e) => ({ ok: false, error: String(e), url: testUrl }));
+      const sampleShiftId = items[0]?.id;
+
+      // "Shift cost" is its own separate scope from "Rostered shifts" — that
+      // split strongly suggests a dedicated endpoint/param, not a field
+      // that's just missing from the list view. Try the likely shapes.
+      results.costAttempts = {};
+      results.costAttempts.include_param = await ehGet(`/api/v1/organisations/${orgId}/rostered_shifts?${q}&include=cost`);
+      results.costAttempts.with_cost_param = await ehGet(`/api/v1/organisations/${orgId}/rostered_shifts?${q}&with_cost=true`);
+      results.costAttempts.expand_param = await ehGet(`/api/v1/organisations/${orgId}/rostered_shifts?${q}&expand=cost`);
+      results.costAttempts.shift_costs_bulk = await ehGet(`/api/v1/organisations/${orgId}/shift_costs?${q}`);
+      results.costAttempts.rostered_shifts_costs_bulk = await ehGet(`/api/v1/organisations/${orgId}/rostered_shifts/costs?${q}`);
+      if (sampleShiftId) {
+        results.costAttempts.per_shift_cost = await ehGet(`/api/v1/organisations/${orgId}/rostered_shifts/${sampleShiftId}/cost`);
+        results.costAttempts.per_shift_detail = await ehGet(`/api/v1/organisations/${orgId}/rostered_shifts/${sampleShiftId}`);
+      }
+
+      // Truncate anything bulky so the debug page stays readable.
+      for (const key of Object.keys(results.costAttempts)) {
+        const r = results.costAttempts[key];
+        if (r.ok && typeof r.data === "object") r.data = JSON.stringify(r.data).slice(0, 1200);
       }
     }
 

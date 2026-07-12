@@ -350,21 +350,46 @@ async function handleApi(request, env, ctx, url) {
     if (orgId) {
       const end = new Date();
       const start = new Date(end.getTime() - 7 * 24 * 60 * 60 * 1000);
-      const rosterUrl = `https://api.employmenthero.com/api/v1/organisations/${orgId}/rostered_shifts?from=${start.toISOString().slice(0, 10)}&to=${end.toISOString().slice(0, 10)}`;
-      results.rosteredShifts = await fetch(rosterUrl, {
-        headers: { Authorization: `Bearer ${auth.accessToken}`, Accept: "application/json" },
-      })
-        .then(async (res) => {
-          const text = await res.text();
-          let data;
-          try {
-            data = JSON.parse(text);
-          } catch {
-            data = text;
-          }
-          return { ok: res.ok, status: res.status, url: rosterUrl, data };
+      const from = start.toISOString().slice(0, 10);
+      const to = end.toISOString().slice(0, 10);
+
+      // "from"/"to" returned "Invalid params" — Employment Hero doesn't
+      // publicly document this endpoint's query params, so try several
+      // plausible names in one pass instead of one guess per round trip.
+      const paramSets = {
+        from_to: { from, to },
+        start_date_end_date: { start_date: from, end_date: to },
+        date_from_date_to: { date_from: from, date_to: to },
+        from_date_to_date: { from_date: from, to_date: to },
+        start_end: { start, end: to },
+        startDate_endDate: { startDate: from, endDate: to },
+        no_params: null,
+      };
+
+      results.rosteredShiftsAttempts = {};
+      for (const [label, params] of Object.entries(paramSets)) {
+        const base = `https://api.employmenthero.com/api/v1/organisations/${orgId}/rostered_shifts`;
+        const testUrl = params ? `${base}?${new URLSearchParams(params).toString()}` : base;
+        results.rosteredShiftsAttempts[label] = await fetch(testUrl, {
+          headers: { Authorization: `Bearer ${auth.accessToken}`, Accept: "application/json" },
         })
-        .catch((e) => ({ ok: false, error: String(e), url: rosterUrl }));
+          .then(async (res) => {
+            const text = await res.text();
+            let data;
+            try {
+              data = JSON.parse(text);
+            } catch {
+              data = text;
+            }
+            // Truncate successful bulky responses so the debug page stays
+            // readable; failures are usually short already.
+            if (res.ok && typeof data === "object") {
+              data = JSON.stringify(data).slice(0, 2000);
+            }
+            return { ok: res.ok, status: res.status, url: testUrl, data };
+          })
+          .catch((e) => ({ ok: false, error: String(e), url: testUrl }));
+      }
     }
 
     return json(results);

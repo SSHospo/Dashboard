@@ -120,6 +120,9 @@
   .source{font-size:11.5px;color:var(--muted);margin-bottom:8px;}
   .drives{font-size:12px;line-height:1.45;}
   .drives b{font-weight:700;}
+  .diag-row{font-size:12px;line-height:1.45;margin-bottom:6px;}
+  .diag-row:last-child{margin-bottom:0;}
+  .diag-row b{font-weight:700;}
 
   /* connections + settings panels */
   .panel-grid{margin-top:18px;}
@@ -355,6 +358,147 @@ function progressCardHtml(value, target, ceilingBase, goodDirection) {
   return `<div class="progress-track"><div class="progress-fill ${fillClass}" style="width:${widthPct.toFixed(1)}%"></div><div class="progress-tick" style="left:${tickPct.toFixed(1)}%"></div></div><div class="target-line">${label} ${fmt("percent", target)} &middot; <span class="${statusClass}">${statusWord}</span></div>`;
 }
 
+// ---- Per-card diagnosis: "What's happening / Why / What to do / Did it work" ----
+// Every line below is derived from real data already in the /api/data response —
+// nothing here is invented. Where the data genuinely can't say (e.g. Overheads'
+// exact driver), the line says so plainly rather than guessing.
+// Wage % / Cost of goods % status against the owner's own target (or a
+// starting-point default band if no target is set yet) — used both for the
+// card's alert border and for the diagnosis "what to do" line.
+function wageStatus(value, target) {
+  if (typeof value !== "number") return "";
+  if (target != null) {
+    if (value > target + 0.02) return "critical";
+    if (value > target) return "warning";
+    return "good";
+  }
+  if (value > 0.32) return "critical";
+  if (value > 0.28) return "warning";
+  return "good";
+}
+function cogsStatus(value, target) {
+  if (typeof value !== "number") return "";
+  if (target != null) {
+    if (value > target + 0.03) return "critical";
+    if (value > target) return "warning";
+    return "good";
+  }
+  if (value > 0.33) return "critical";
+  if (value > 0.30) return "warning";
+  return "good";
+}
+// Flags a week-on-week move only once it's big enough to matter, rather than
+// colouring every tile every week.
+function pctDeltaStatus(d, redThreshold, amberThreshold) {
+  if (!d || typeof d.pct !== "number") return "";
+  if (d.pct <= -redThreshold) return "critical";
+  if (d.pct <= -amberThreshold) return "warning";
+  return "";
+}
+
+const DIAG_LABELS = ["What's happening:", "Why:", "What to do:", "Did it work:"];
+
+function moveWord(d) {
+  if (!d || typeof d.pct !== "number") return "No comparison yet";
+  if (Math.abs(d.pct) < 0.01) return "Flat";
+  return (d.pct > 0 ? "Up " : "Down ") + (Math.abs(d.pct) * 100).toFixed(1) + "%";
+}
+function moveWordPts(d) {
+  if (!d || typeof d.abs !== "number") return "No comparison yet";
+  const pts = d.abs * 100;
+  if (Math.abs(pts) < 0.1) return "Flat";
+  return (pts > 0 ? "Up " : "Down ") + Math.abs(pts).toFixed(1) + " pts";
+}
+// Looks at the last 3 trend buckets to say whether the metric turned around,
+// kept improving, slipped back, or is still heading the wrong way.
+function trendRecovery(trend, goodDirection) {
+  const vals = (trend || []).filter((v) => typeof v === "number");
+  if (vals.length < 3) return "Not enough history yet to say";
+  const n = vals.length;
+  const lastMove = vals[n - 1] - vals[n - 2];
+  const prevMove = vals[n - 2] - vals[n - 3];
+  const lastGood = goodDirection === "up" ? lastMove > 0 : lastMove < 0;
+  const prevGood = goodDirection === "up" ? prevMove > 0 : prevMove < 0;
+  if (lastGood && !prevGood) return "Yes — turned around this period";
+  if (lastGood && prevGood) return "Yes — still improving";
+  if (!lastGood && prevGood) return "Not yet — slipped back after improving";
+  return "Not yet — still heading the wrong way";
+}
+
+function diagRevenue(m) {
+  const rev = m.revenue, txn = m.transactions, acs = m.averageCustomerSpend;
+  const what = `${moveWord(rev.vsPrevious)} vs last week — ${fmt("money", rev.value)}.`;
+  let why = "Not enough data yet to tell footfall from spend.";
+  if (rev.vsPrevious && txn.vsPrevious && acs.vsPrevious) {
+    const txnMoved = Math.abs(txn.vsPrevious.pct) >= 0.03, acsMoved = Math.abs(acs.vsPrevious.pct) >= 0.03;
+    if (txnMoved && !acsMoved) why = `Volume did it — Transactions ${moveWord(txn.vsPrevious).toLowerCase()}, spend per head steady.`;
+    else if (!txnMoved && acsMoved) why = `Spend per head did it — Transactions flat, Average spend ${moveWord(acs.vsPrevious).toLowerCase()}.`;
+    else if (txnMoved && acsMoved) why = `Both moved — Transactions ${moveWord(txn.vsPrevious).toLowerCase()}, Average spend ${moveWord(acs.vsPrevious).toLowerCase()}.`;
+    else why = "Neither lever moved much — check for a one-off (function, catering order).";
+  }
+  const status = pctDeltaStatus(rev.vsPrevious, 0.10, 0.03);
+  const doText = status === "critical" ? "Check footfall drivers this week — marketing, weather, local events."
+    : status === "warning" ? "Keep watching — act if the dip continues next period."
+    : (rev.vsPrevious && rev.vsPrevious.pct > 0.03) ? "Keep doing what worked — watch if it repeats or was a one-off."
+    : "No action needed.";
+  return [what, why, doText, `${trendRecovery(rev.trend, "up")}.`];
+}
+
+function diagTransactions(m) {
+  const txn = m.transactions;
+  const what = `${moveWord(txn.vsPrevious)} vs last week — ${fmt("count", txn.value)}.`;
+  const why = !txn.vsPrevious ? "Not enough data yet to say what's driving footfall."
+    : Math.abs(txn.vsPrevious.pct) >= 0.03 ? "Footfall itself moved — this is a covers story, not a pricing one."
+    : "Footfall's steady — any Revenue move is coming from spend per head, not covers.";
+  const status = pctDeltaStatus(txn.vsPrevious, 0.10, 0.05);
+  const doText = status === "critical" ? "Worth investigating — marketing, local events, or a competitor change."
+    : status === "warning" ? "Keep an eye on footfall next period."
+    : "No action needed.";
+  return [what, why, doText, `${trendRecovery(txn.trend, "up")}.`];
+}
+
+function diagACS(m) {
+  const acs = m.averageCustomerSpend;
+  const what = `${moveWord(acs.vsPrevious)} vs last week — ${fmt("money", acs.value)}.`;
+  const why = !acs.vsPrevious ? "Not enough data yet to say what's moving spend per head."
+    : Math.abs(acs.vsPrevious.pct) >= 0.03 ? "Pricing, upsells or basket mix moved this — not footfall."
+    : "Spend per head is steady — nothing unusual here.";
+  const acsDown = acs.vsPrevious && typeof acs.vsPrevious.pct === "number" && acs.vsPrevious.pct <= -0.05;
+  const doText = acsDown ? "Revisit upsell prompts and specials at the till." : "No action needed.";
+  return [what, why, doText, `${trendRecovery(acs.trend, "up")}.`];
+}
+
+function diagCostOfGoods(m, targets) {
+  const cogsPct = m.costOfGoodsPct, cogsDollar = m.costOfGoods, rev = m.revenue;
+  const what = `${moveWordPts(cogsPct.vsPrevious)} vs last week — ${fmt("percent", cogsPct.value)} of revenue.`;
+  const why = (!cogsDollar.vsPrevious || !rev.vsPrevious) ? "Not enough data yet to separate volume from margin."
+    : Math.abs(cogsDollar.vsPrevious.pct - rev.vsPrevious.pct) < 0.03 ? "Cost is tracking revenue — looks like volume, not a margin problem."
+    : "Cost moved out of step with revenue — check supplier pricing, portioning or waste.";
+  const bad = cogsStatus(cogsPct.value, targets.costOfGoodsPct);
+  const doText = (bad === "critical" || bad === "warning") ? "Check supplier pricing, portion sizes and waste this week." : "No action needed.";
+  return [what, why, doText, `${trendRecovery(cogsPct.trend, "down")}.`];
+}
+
+function diagWage(m, targets) {
+  const wagePct = m.wagePct, wageDollar = m.wagesAndSuper, rev = m.revenue;
+  const what = `${moveWordPts(wagePct.vsPrevious)} vs last week — ${fmt("percent", wagePct.value)} of revenue.`;
+  const why = (!wageDollar.vsPrevious || !rev.vsPrevious) ? "Not enough data yet to say if it's roster or revenue driven."
+    : wageDollar.vsPrevious.pct > rev.vsPrevious.pct + 0.03 ? "Labour cost grew faster than revenue — rostered ahead of trade."
+    : "Labour is broadly tracking revenue.";
+  const bad = wageStatus(wagePct.value, targets.wagePct);
+  const doText = (bad === "critical" || bad === "warning") ? "Check this week's roster against covers before next week's is set." : "No action needed.";
+  return [what, why, doText, `${trendRecovery(wagePct.trend, "down")}.`];
+}
+
+function diagOverheads(m, overheadsPctNow, targets) {
+  const overheads = m.overheads;
+  const what = `${moveWord(overheads.vsPrevious)} vs last week — ${fmt("money", overheads.value)}.`;
+  const why = "Mostly fixed costs — rent, subscriptions, utilities and insurance, not tied to how busy you were.";
+  const overBad = overheadsPctNow !== null && targets.overheadsPct != null && overheadsPctNow > targets.overheadsPct;
+  const doText = overBad ? "Review subscriptions, utilities and any new recurring spend." : "No action needed.";
+  return [what, why, doText, `${trendRecovery(overheads.trend, "down")}.`];
+}
+
 async function api(path, opts) {
   const res = await fetch(path, { ...opts, headers: { "Content-Type": "application/json", ...(opts && opts.headers) } });
   if (!res.ok) {
@@ -378,7 +522,10 @@ function renderPeriodButtons() {
   });
 }
 
-function cardHtml({ eyebrow, alertClass, figureMain, figureSub, figureLabels, compareRows, extraRows, trendLabel, trendHtml, source, drives }) {
+function cardHtml({ eyebrow, alertClass, figureMain, figureSub, figureLabels, compareRows, extraRows, trendLabel, trendHtml, source, drives, diagnosis }) {
+  const footBody = diagnosis
+    ? diagnosis.map((line, i) => `<div class="diag-row"><b>${DIAG_LABELS[i]}</b> ${line}</div>`).join("")
+    : `<div class="drives"><b>Drives:</b> ${drives}</div>`;
   return `<div class="card${alertClass ? " " + alertClass : ""}">
     <div class="eyebrow">${eyebrow}</div>
     <div class="figure-row"><span class="figure">${figureMain}</span>${figureSub ? `<span class="figure-sub">${figureSub}</span>` : ""}</div>
@@ -388,7 +535,7 @@ function cardHtml({ eyebrow, alertClass, figureMain, figureSub, figureLabels, co
     ${trendHtml ? `<div class="trend-label">${trendLabel}</div>${trendHtml}` : ""}
     <div class="foot">
       <div class="source">${source}</div>
-      <div class="drives"><b>Drives:</b> ${drives}</div>
+      ${footBody}
     </div>
   </div>`;
 }
@@ -406,7 +553,7 @@ function renderCards(metrics) {
       trendLabel: "TREND &middot; RECENT PERIODS",
       trendHtml: trendBarsHtml(revenue.trend),
       source: "All trading income, ex-GST &middot; from Xero",
-      drives: "Is the top line growing? Sets the base every other number is judged against.",
+      diagnosis: diagRevenue(metrics),
     })}
     ${cardHtml({
       eyebrow: "NUMBER OF TRANSACTIONS",
@@ -415,7 +562,7 @@ function renderCards(metrics) {
       trendLabel: "TREND &middot; RECENT PERIODS",
       trendHtml: trendBarsHtml(transactions.trend),
       source: "Completed transactions &middot; from Square",
-      drives: "Busier or quieter? Points you at footfall versus spend per visit.",
+      diagnosis: diagTransactions(metrics),
     })}
     ${cardHtml({
       eyebrow: "AVERAGE CUSTOMER SPEND",
@@ -424,7 +571,7 @@ function renderCards(metrics) {
       trendLabel: "TREND &middot; RECENT PERIODS",
       trendHtml: trendBarsHtml(acs.trend),
       source: "Revenue (Xero, ex-GST) &divide; transactions (Square)",
-      drives: "Are upsells and pricing working? Move it with specials, bundles and staff prompts.",
+      diagnosis: diagACS(metrics),
     })}
   </div>`;
 
@@ -447,7 +594,7 @@ function renderCards(metrics) {
       extraRows: progressCardHtml(typeof cogsPct.value === "number" ? cogsPct.value : null, targets.costOfGoodsPct, 0.45, "down"),
       compareRows: ptsCompareRow("vs week before", cogsPct.vsPrevious, "down") + ptsCompareRow("vs same week last year", cogsPct.vsLastYear, "down"),
       source: "Everything in your Cost of Sales accounts, ex-GST &middot; from Xero",
-      drives: "Rising as a share of revenue? Check supplier prices, portioning and waste.",
+      diagnosis: diagCostOfGoods(metrics, targets),
     })}
     ${cardHtml({
       eyebrow: "WAGE %",
@@ -458,7 +605,7 @@ function renderCards(metrics) {
       extraRows: progressCardHtml(typeof wagePct.value === "number" ? wagePct.value : null, targets.wagePct, 0.45, "down"),
       compareRows: ptsCompareRow("vs week before", wagePct.vsPrevious, "down") + ptsCompareRow("vs same week last year", wagePct.vsLastYear, "down"),
       source: "Wages plus super, as a share of revenue &middot; from Xero",
-      drives: "Rostered to your trade? Over target means trim hours or lift sales per shift.",
+      diagnosis: diagWage(metrics, targets),
     })}
     ${cardHtml({
       eyebrow: "OVERHEADS",
@@ -468,7 +615,7 @@ function renderCards(metrics) {
       compareRows: pctCompareRow("vs week before", metrics.overheads.vsPrevious, "down") + pctCompareRow("vs same week last year", metrics.overheads.vsLastYear, "down"),
       extraRows: progressCardHtml(overheadsPctNow, targets.overheadsPct, 0.25, "down"),
       source: "Operating expenses excluding wages, super and cost of sales &middot; from Xero",
-      drives: "Fixed costs drifting up? Review subscriptions, utilities and new recurring spend.",
+      diagnosis: diagOverheads(metrics, overheadsPctNow, targets),
     })}
   </div>`;
 

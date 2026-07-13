@@ -658,7 +658,7 @@ async function loadConnections() {
       <span><span class="dot ${c.square.connected ? "on" : "off"}"></span>Square ${c.square.connected ? "— connected" : "— not connected"}</span>
     </div>
     <div class="conn-row">
-      <span><span class="dot ${c.employmentHero && c.employmentHero.connected ? "on" : "off"}"></span>Employment Hero (rostering) ${c.employmentHero && c.employmentHero.connected ? "— " + (c.employmentHero.organisationName || "connected") + " (projected Wage % not live yet)" : "— not connected"}</span>
+      <span><span class="dot ${c.employmentHero && c.employmentHero.connected ? "on" : "off"}"></span>Employment Hero (rostering) ${c.employmentHero && c.employmentHero.connected ? "— " + (c.employmentHero.organisationName || "connected") + " (not used on this dashboard — Employment Hero's API doesn't expose shift cost data to third-party apps)" : "— not connected"}</span>
       ${c.employmentHero && c.employmentHero.connected ? "" : '<a class="link-btn" href="/api/oauth/employmenthero/start">Connect</a>'}
     </div>
   `;

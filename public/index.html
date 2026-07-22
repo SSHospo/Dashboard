@@ -64,6 +64,19 @@
     padding:6px 14px;border-radius:999px;cursor:pointer;font-family:inherit;
   }
   .period-row button.active{background:var(--ink);color:#fff;border-color:var(--ink);font-weight:600;}
+  #period-select{display:flex;align-items:center;gap:8px;flex-wrap:wrap;}
+  .custom-range-row{display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-size:12px;color:var(--muted);
+    width:100%;margin-top:4px;}
+  .custom-range-row label{display:flex;align-items:center;gap:5px;}
+  .custom-range-row input[type=date]{
+    border:1px solid var(--border);border-radius:6px;padding:5px 8px;font-family:inherit;
+    font-size:12px;color:var(--ink);background:#fff;
+  }
+  .custom-range-row button{
+    border:1px solid var(--ink);background:var(--ink);color:#fff;border-radius:999px;
+    padding:6px 14px;font-size:12px;cursor:pointer;font-family:inherit;font-weight:600;
+  }
+  .custom-range-row .range-error{color:#b3261e;font-weight:600;}
 
   .meta-row{display:flex;align-items:center;gap:14px;color:var(--muted);font-size:12px;margin:6px 0 24px;}
   .meta-row button{
@@ -275,6 +288,41 @@ const PERIODS = [
 
 let currentPeriod = "this_week";
 let currentSettings = {};
+let customStart = "";
+let customEnd = "";
+let customRangeError = "";
+
+function todayISO() {
+  return new Date().toISOString().slice(0, 10);
+}
+
+// Default the custom picker to the trailing 7 days so it's useful the moment
+// it's opened, rather than forcing a pick before showing anything.
+function defaultCustomRange() {
+  const end = new Date();
+  const start = new Date();
+  start.setDate(start.getDate() - 6);
+  const iso = (d) => d.toISOString().slice(0, 10);
+  return { start: iso(start), end: iso(end) };
+}
+
+// Comparison-row labels depend on the selected period — "vs week before"
+// reads as wrong for a month, FY or custom range, so this isn't just cosmetic.
+function compareLabels() {
+  switch (currentPeriod) {
+    case "this_week":
+    case "last_week":
+      return { prev: "vs week before", ly: "vs same week last year" };
+    case "this_month":
+    case "last_month":
+      return { prev: "vs month before", ly: "vs same month last year" };
+    case "this_fy":
+    case "last_fy":
+      return { prev: "vs previous FY", ly: "vs same period last year" };
+    default:
+      return { prev: "vs previous period", ly: "vs same period last year" };
+  }
+}
 
 function fmt(format, value) {
   if (value === "not_configured") return "Not configured";
@@ -286,6 +334,7 @@ function fmt(format, value) {
 }
 
 function periodLabel() {
+  if (currentPeriod === "custom") return "Custom";
   const found = PERIODS.find(([k]) => k === currentPeriod);
   return found ? found[1] : "";
 }
@@ -510,16 +559,63 @@ async function api(path, opts) {
 
 function renderPeriodButtons() {
   const el = document.getElementById("period-select");
-  el.innerHTML = PERIODS.map(([key, label]) =>
+  const presetButtons = PERIODS.map(([key, label]) =>
     `<button data-period="${key}" class="${key === currentPeriod ? "active" : ""}">${label}</button>`
   ).join("");
-  el.querySelectorAll("button").forEach((btn) => {
+  const customButton = `<button id="custom-period-btn" class="${currentPeriod === "custom" ? "active" : ""}">Custom&hellip;</button>`;
+  const customPanel = currentPeriod === "custom" ? `
+    <div class="custom-range-row">
+      <label>From <input type="date" id="custom-start" value="${customStart}" max="${todayISO()}"></label>
+      <label>To <input type="date" id="custom-end" value="${customEnd}" max="${todayISO()}"></label>
+      <button id="custom-apply-btn">Apply</button>
+      ${customRangeError ? `<span class="range-error">${customRangeError}</span>` : ""}
+    </div>` : "";
+
+  el.innerHTML = presetButtons + customButton + customPanel;
+
+  el.querySelectorAll("button[data-period]").forEach((btn) => {
     btn.addEventListener("click", () => {
       currentPeriod = btn.dataset.period;
+      customRangeError = "";
       renderPeriodButtons();
       loadData();
     });
   });
+
+  document.getElementById("custom-period-btn").addEventListener("click", () => {
+    if (!customStart || !customEnd) {
+      const d = defaultCustomRange();
+      customStart = d.start;
+      customEnd = d.end;
+    }
+    currentPeriod = "custom";
+    customRangeError = "";
+    renderPeriodButtons();
+    loadData();
+  });
+
+  const applyBtn = document.getElementById("custom-apply-btn");
+  if (applyBtn) {
+    applyBtn.addEventListener("click", () => {
+      // Store whatever was typed first, even if invalid, so the re-render
+      // below doesn't wipe out the owner's input when showing an error.
+      customStart = document.getElementById("custom-start").value;
+      customEnd = document.getElementById("custom-end").value;
+      if (!customStart || !customEnd) {
+        customRangeError = "Pick both a start and end date.";
+        renderPeriodButtons();
+        return;
+      }
+      if (customStart > customEnd) {
+        customRangeError = "Start date must be before the end date.";
+        renderPeriodButtons();
+        return;
+      }
+      customRangeError = "";
+      renderPeriodButtons();
+      loadData();
+    });
+  }
 }
 
 function cardHtml({ eyebrow, alertClass, figureMain, figureSub, figureLabels, compareRows, extraRows, trendLabel, trendHtml, source, drives, diagnosis }) {
@@ -542,6 +638,7 @@ function cardHtml({ eyebrow, alertClass, figureMain, figureSub, figureLabels, co
 
 function renderCards(metrics) {
   const targets = currentSettings.targets || {};
+  const labels = compareLabels();
 
   // Row 1 — Revenue, Transactions, Average customer spend
   const revenue = metrics.revenue, transactions = metrics.transactions, acs = metrics.averageCustomerSpend;
@@ -549,7 +646,7 @@ function renderCards(metrics) {
     ${cardHtml({
       eyebrow: "REVENUE",
       figureMain: fmt("money", revenue.value),
-      compareRows: pctCompareRow("vs week before", revenue.vsPrevious, "up") + pctCompareRow("vs same week last year", revenue.vsLastYear, "up"),
+      compareRows: pctCompareRow(labels.prev, revenue.vsPrevious, "up") + pctCompareRow(labels.ly, revenue.vsLastYear, "up"),
       trendLabel: "TREND &middot; RECENT PERIODS",
       trendHtml: trendBarsHtml(revenue.trend),
       source: "All trading income, ex-GST &middot; from Xero",
@@ -558,7 +655,7 @@ function renderCards(metrics) {
     ${cardHtml({
       eyebrow: "NUMBER OF TRANSACTIONS",
       figureMain: fmt("count", transactions.value),
-      compareRows: pctCompareRow("vs week before", transactions.vsPrevious, "up") + pctCompareRow("vs same week last year", transactions.vsLastYear, "up"),
+      compareRows: pctCompareRow(labels.prev, transactions.vsPrevious, "up") + pctCompareRow(labels.ly, transactions.vsLastYear, "up"),
       trendLabel: "TREND &middot; RECENT PERIODS",
       trendHtml: trendBarsHtml(transactions.trend),
       source: "Completed transactions &middot; from Square",
@@ -567,7 +664,7 @@ function renderCards(metrics) {
     ${cardHtml({
       eyebrow: "AVERAGE CUSTOMER SPEND",
       figureMain: fmt("money", acs.value),
-      compareRows: pctCompareRow("vs week before", acs.vsPrevious, "up") + pctCompareRow("vs same week last year", acs.vsLastYear, "up"),
+      compareRows: pctCompareRow(labels.prev, acs.vsPrevious, "up") + pctCompareRow(labels.ly, acs.vsLastYear, "up"),
       trendLabel: "TREND &middot; RECENT PERIODS",
       trendHtml: trendBarsHtml(acs.trend),
       source: "Revenue (Xero, ex-GST) &divide; transactions (Square)",
@@ -592,7 +689,7 @@ function renderCards(metrics) {
       figureSub: fmt("money", metrics.costOfGoods.value),
       figureLabels: "<span>OF REVENUE</span><span>DOLLARS</span>",
       extraRows: progressCardHtml(typeof cogsPct.value === "number" ? cogsPct.value : null, targets.costOfGoodsPct, 0.45, "down"),
-      compareRows: ptsCompareRow("vs week before", cogsPct.vsPrevious, "down") + ptsCompareRow("vs same week last year", cogsPct.vsLastYear, "down"),
+      compareRows: ptsCompareRow(labels.prev, cogsPct.vsPrevious, "down") + ptsCompareRow(labels.ly, cogsPct.vsLastYear, "down"),
       source: "Everything in your Cost of Sales accounts, ex-GST &middot; from Xero",
       diagnosis: diagCostOfGoods(metrics, targets),
     })}
@@ -603,7 +700,7 @@ function renderCards(metrics) {
       figureSub: fmt("money", metrics.wagesAndSuper.value),
       figureLabels: "<span>OF REVENUE</span><span>DOLLARS</span>",
       extraRows: progressCardHtml(typeof wagePct.value === "number" ? wagePct.value : null, targets.wagePct, 0.45, "down"),
-      compareRows: ptsCompareRow("vs week before", wagePct.vsPrevious, "down") + ptsCompareRow("vs same week last year", wagePct.vsLastYear, "down"),
+      compareRows: ptsCompareRow(labels.prev, wagePct.vsPrevious, "down") + ptsCompareRow(labels.ly, wagePct.vsLastYear, "down"),
       source: "Wages plus super, as a share of revenue &middot; from Xero",
       diagnosis: diagWage(metrics, targets),
     })}
@@ -612,7 +709,7 @@ function renderCards(metrics) {
       alertClass: overheadsStatusBad ? "alert" : "",
       figureMain: fmt("money", metrics.overheads.value),
       figureSub: overheadsPctNow !== null ? fmt("percent", overheadsPctNow) + " of revenue" : "",
-      compareRows: pctCompareRow("vs week before", metrics.overheads.vsPrevious, "down") + pctCompareRow("vs same week last year", metrics.overheads.vsLastYear, "down"),
+      compareRows: pctCompareRow(labels.prev, metrics.overheads.vsPrevious, "down") + pctCompareRow(labels.ly, metrics.overheads.vsLastYear, "down"),
       extraRows: progressCardHtml(overheadsPctNow, targets.overheadsPct, 0.25, "down"),
       source: "Operating expenses excluding wages, super and cost of sales &middot; from Xero",
       diagnosis: diagOverheads(metrics, overheadsPctNow, targets),
@@ -630,7 +727,7 @@ function renderCards(metrics) {
       figureSub: fmt("money", profit.value),
       figureLabels: "<span>OF REVENUE</span><span>DOLLARS</span>",
       extraRows: progressCardHtml(typeof profitPct.value === "number" ? profitPct.value : null, targets.profitFloorPct, 0.35, "up"),
-      compareRows: ptsCompareRow("vs week before", profitPct.vsPrevious, "up") + ptsCompareRow("vs same week last year", profitPct.vsLastYear, "up"),
+      compareRows: ptsCompareRow(labels.prev, profitPct.vsPrevious, "up") + ptsCompareRow(labels.ly, profitPct.vsLastYear, "up"),
       source: "Revenue minus Cost of goods, Wages and Overheads &middot; from Xero",
       drives: "The number that actually matters. Below floor means one of the cards above needs attention.",
     })}
@@ -640,7 +737,10 @@ function renderCards(metrics) {
 }
 
 async function loadData() {
-  const data = await api(`/api/data?period=${currentPeriod}`);
+  const query = currentPeriod === "custom"
+    ? `period=custom&start=${encodeURIComponent(customStart)}&end=${encodeURIComponent(customEnd)}`
+    : `period=${currentPeriod}`;
+  const data = await api(`/api/data?${query}`);
   document.getElementById("unverified-banner").style.display = data.unverified ? "block" : "none";
   document.getElementById("period-title").textContent = `${periodLabel()} · ${formatDateRange(data.period, currentSettings.timezone)}`;
   document.getElementById("updated-label").textContent = `Updated ${new Date(data.lastSynced).toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit", timeZone: currentSettings.timezone })} · updates when you open or refresh this page`;

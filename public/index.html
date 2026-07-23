@@ -123,6 +123,11 @@
   .delta.up-bad, .delta.down-bad{color:var(--red);}
   .compare-block{border-top:1px solid var(--border);margin-top:2px;padding-top:8px;}
 
+  .sub-metric{font-size:12px;color:var(--ink);border-top:1px dashed var(--border);margin-top:10px;padding-top:10px;line-height:1.45;}
+  .sub-metric.muted{color:var(--muted);}
+  .sub-metric .muted{color:var(--muted);}
+  .sub-metric-warn{font-size:11px;color:var(--red);margin-top:4px;line-height:1.4;}
+
   .trend-label{font-size:9px;letter-spacing:.05em;color:var(--muted);margin:14px 0 6px;}
   .trend{display:flex;align-items:flex-end;gap:4px;height:38px;}
   .trend .bar{flex:1;border-radius:2px 2px 0 0;background:var(--green);}
@@ -156,6 +161,20 @@
     color:#fff;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit;
   }
   .muted-note{font-size:11.5px;color:var(--muted);margin-top:8px;}
+
+  .settings-subhead{font-size:13px;font-weight:700;margin:18px 0 8px;color:var(--ink);}
+  .settings-subhead .hint{font-weight:400;color:var(--muted);font-size:11.5px;display:block;margin-top:2px;}
+  .staffpay-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid var(--border);}
+  .staffpay-row input[type="text"]{flex:1 1 130px;margin-bottom:0;}
+  .staffpay-row select{flex:1 1 105px;margin-bottom:0;}
+  .staffpay-row input[type="number"]{flex:0 1 64px;margin-bottom:0;}
+  .staffpay-row .staffpay-age-label{font-size:11px;color:var(--muted);flex:0 0 auto;}
+  .staffpay-remove{flex:0 0 auto;border:1px solid var(--border);background:transparent;color:var(--red);
+    border-radius:8px;padding:9px 10px;cursor:pointer;font-family:inherit;font-size:13px;}
+  .secondary-btn{width:100%;padding:9px;border:1px dashed var(--border);border-radius:8px;background:transparent;
+    color:var(--ink);font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;margin-bottom:14px;}
+  .card textarea{width:100%;padding:9px 11px;border:1px solid var(--border);border-radius:8px;
+    background:var(--bg);color:var(--ink);font-size:13px;margin-bottom:8px;font-family:inherit;resize:vertical;}
 
   footer.note{margin-top:34px;font-size:11px;color:var(--muted);}
 
@@ -269,6 +288,17 @@
       </div>
       <label>Accent colour</label>
       <input type="color" id="set-accentColour">
+
+      <h3 class="settings-subhead">Staff pay setup
+        <span class="hint">For the projected Wage % from your Employment Hero roster — Restaurant Industry Award rates, effective 1 Jul 2026. Never used for real payroll, only this estimate.</span>
+      </h3>
+      <div id="staffpay-rows"></div>
+      <button type="button" id="staffpay-add" class="secondary-btn">+ Add staff member</button>
+
+      <label>Public holidays (one date per line, YYYY-MM-DD)</label>
+      <textarea id="set-publicHolidays" rows="3" placeholder="2026-12-25&#10;2026-12-26&#10;2027-01-01"></textarea>
+      <p class="muted-note">A name here must match Employment Hero exactly, or that person's shifts won't be counted — you'll see a note under Wage % if that happens. Dates left off this list are still costed at their normal weekday/Saturday/Sunday rate, just without the public holiday loading.</p>
+
       <button id="settings-save">Save settings</button>
       <p class="muted-note">Trading-day rollover and timezone were set during the build — ask if these ever need to change.</p>
     </div>
@@ -285,6 +315,65 @@ const PERIODS = [
   ["this_month", "This month"], ["last_month", "Last month"],
   ["this_fy", "This FY"], ["last_fy", "Last FY"],
 ];
+
+// Labels only — must match the keys in lib/awardRates.js LEVELS. Actual
+// dollar rates live only on the backend; nothing money-related is
+// duplicated here.
+const AWARD_LEVELS = [
+  ["introductory", "Introductory"],
+  ["level1", "Level 1"],
+  ["level2", "Level 2"],
+  ["level3", "Level 3"],
+  ["level4", "Level 4"],
+  ["level5", "Level 5"],
+  ["level6", "Level 6"],
+];
+
+let staffPayDraft = [];
+let staffPayIdCounter = 0;
+
+function renderStaffPayRows() {
+  const el = document.getElementById("staffpay-rows");
+  if (!staffPayDraft.length) {
+    el.innerHTML = `<p class="muted-note">No staff added yet — click "+ Add staff member" below.</p>`;
+    return;
+  }
+  el.innerHTML = staffPayDraft.map((row) => `
+    <div class="staffpay-row" data-id="${row.id}">
+      <input type="text" class="sp-name" placeholder="Name (must match Employment Hero)" value="${(row.name || "").replace(/"/g, "&quot;")}">
+      <select class="sp-level">
+        ${AWARD_LEVELS.map(([k, label]) => `<option value="${k}" ${row.level === k ? "selected" : ""}>${label}</option>`).join("")}
+      </select>
+      <select class="sp-type">
+        <option value="casual" ${row.employmentType === "casual" ? "selected" : ""}>Casual</option>
+        <option value="permanent" ${row.employmentType === "permanent" ? "selected" : ""}>Permanent</option>
+      </select>
+      <span class="staffpay-age-label">Age if &lt;21</span>
+      <input type="number" class="sp-age" min="14" max="20" placeholder="&mdash;" value="${row.age != null ? row.age : ""}">
+      <button type="button" class="staffpay-remove" title="Remove">&times;</button>
+    </div>
+  `).join("");
+
+  el.querySelectorAll(".staffpay-row").forEach((rowEl) => {
+    const id = Number(rowEl.dataset.id);
+    const row = staffPayDraft.find((r) => r.id === id);
+    rowEl.querySelector(".sp-name").addEventListener("input", (e) => { row.name = e.target.value; });
+    rowEl.querySelector(".sp-level").addEventListener("change", (e) => { row.level = e.target.value; });
+    rowEl.querySelector(".sp-type").addEventListener("change", (e) => { row.employmentType = e.target.value; });
+    rowEl.querySelector(".sp-age").addEventListener("input", (e) => {
+      row.age = e.target.value === "" ? null : Number(e.target.value);
+    });
+    rowEl.querySelector(".staffpay-remove").addEventListener("click", () => {
+      staffPayDraft = staffPayDraft.filter((r) => r.id !== id);
+      renderStaffPayRows();
+    });
+  });
+}
+
+document.getElementById("staffpay-add").addEventListener("click", () => {
+  staffPayDraft.push({ id: staffPayIdCounter++, name: "", level: "level1", employmentType: "casual", age: null });
+  renderStaffPayRows();
+});
 
 let currentPeriod = "this_week";
 let currentSettings = {};
@@ -618,7 +707,7 @@ function renderPeriodButtons() {
   }
 }
 
-function cardHtml({ eyebrow, alertClass, figureMain, figureSub, figureLabels, compareRows, extraRows, trendLabel, trendHtml, source, drives, diagnosis }) {
+function cardHtml({ eyebrow, alertClass, figureMain, figureSub, figureLabels, compareRows, extraRows, trendLabel, trendHtml, source, drives, diagnosis, subMetric }) {
   const footBody = diagnosis
     ? diagnosis.map((line, i) => `<div class="diag-row"><b>${DIAG_LABELS[i]}</b> ${line}</div>`).join("")
     : `<div class="drives"><b>Drives:</b> ${drives}</div>`;
@@ -629,6 +718,7 @@ function cardHtml({ eyebrow, alertClass, figureMain, figureSub, figureLabels, co
     ${extraRows || ""}
     <div class="${extraRows ? "compare-block" : ""}">${compareRows}</div>
     ${trendHtml ? `<div class="trend-label">${trendLabel}</div>${trendHtml}` : ""}
+    ${subMetric || ""}
     <div class="foot">
       <div class="source">${source}</div>
       ${footBody}
@@ -636,7 +726,22 @@ function cardHtml({ eyebrow, alertClass, figureMain, figureSub, figureLabels, co
   </div>`;
 }
 
-function renderCards(metrics) {
+// Projected Wage % — from Employment Hero rostered hours x the owner's own
+// award-rate setup. Deliberately never shown as if it were real payroll
+// data; always labelled "projected" and clearly sourced, per kpi-spec.md.
+function projectedWageSubMetricHtml(projectedWage, sources) {
+  if (!sources || !sources.employmentHero) return "";
+  if (!projectedWage || typeof projectedWage.pct !== "number") {
+    return `<div class="sub-metric muted">No projected Wage % yet — add staff pay setup in Settings to calculate one from your Employment Hero roster.</div>`;
+  }
+  const unmatched = projectedWage.unmatchedStaffNames || [];
+  const warn = unmatched.length
+    ? `<div class="sub-metric-warn">No pay setup for: ${unmatched.join(", ")} — their shifts aren't counted yet. Add them in Settings.</div>`
+    : "";
+  return `<div class="sub-metric">Projected (rostered): <b>${fmt("percent", projectedWage.pct)}</b> <span class="muted">— from Employment Hero hours &times; your award rates, not from Xero</span></div>${warn}`;
+}
+
+function renderCards(metrics, projectedWage, sources) {
   const targets = currentSettings.targets || {};
   const labels = compareLabels();
 
@@ -703,6 +808,7 @@ function renderCards(metrics) {
       compareRows: ptsCompareRow(labels.prev, wagePct.vsPrevious, "down") + ptsCompareRow(labels.ly, wagePct.vsLastYear, "down"),
       source: "Wages plus super, as a share of revenue &middot; from Xero",
       diagnosis: diagWage(metrics, targets),
+      subMetric: projectedWageSubMetricHtml(projectedWage, sources),
     })}
     ${cardHtml({
       eyebrow: "OVERHEADS",
@@ -744,7 +850,7 @@ async function loadData() {
   document.getElementById("unverified-banner").style.display = data.unverified ? "block" : "none";
   document.getElementById("period-title").textContent = `${periodLabel()} · ${formatDateRange(data.period, currentSettings.timezone)}`;
   document.getElementById("updated-label").textContent = `Updated ${new Date(data.lastSynced).toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit", timeZone: currentSettings.timezone })} · updates when you open or refresh this page`;
-  renderCards(data.metrics);
+  renderCards(data.metrics, data.projectedWage, data.sources);
 }
 
 async function loadConnections() {
@@ -758,7 +864,7 @@ async function loadConnections() {
       <span><span class="dot ${c.square.connected ? "on" : "off"}"></span>Square ${c.square.connected ? "— connected" : "— not connected"}</span>
     </div>
     <div class="conn-row">
-      <span><span class="dot ${c.employmentHero && c.employmentHero.connected ? "on" : "off"}"></span>Employment Hero (rostering) ${c.employmentHero && c.employmentHero.connected ? "— " + (c.employmentHero.organisationName || "connected") + " (not used on this dashboard — Employment Hero's API doesn't expose shift cost data to third-party apps)" : "— not connected"}</span>
+      <span><span class="dot ${c.employmentHero && c.employmentHero.connected ? "on" : "off"}"></span>Employment Hero (rostering) ${c.employmentHero && c.employmentHero.connected ? "— " + (c.employmentHero.organisationName || "connected") + " · powers Projected Wage % (add staff in Settings if you haven't)" : "— not connected"}</span>
       ${c.employmentHero && c.employmentHero.connected ? "" : '<a class="link-btn" href="/api/oauth/employmenthero/start">Connect</a>'}
     </div>
   `;
@@ -777,6 +883,16 @@ async function loadSettings() {
   document.getElementById("set-targetOverheads").value = s.targets && s.targets.overheadsPct != null ? s.targets.overheadsPct * 100 : "";
   document.getElementById("set-targetProfitFloor").value = s.targets && s.targets.profitFloorPct != null ? s.targets.profitFloorPct * 100 : "";
   document.documentElement.style.setProperty("--green", s.accentColour || "#2F6B4F");
+
+  staffPayDraft = (s.staffPay || []).map((p) => ({
+    id: staffPayIdCounter++,
+    name: p.name || "",
+    level: p.level || "level1",
+    employmentType: p.employmentType || "casual",
+    age: p.age ?? null,
+  }));
+  renderStaffPayRows();
+  document.getElementById("set-publicHolidays").value = (s.publicHolidays || []).join("\n");
 }
 
 document.getElementById("settings-toggle").addEventListener("click", () => {
@@ -802,6 +918,13 @@ document.getElementById("settings-save").addEventListener("click", async () => {
         overheadsPct: overheads ? Number(overheads) / 100 : undefined,
         profitFloorPct: profitFloor ? Number(profitFloor) / 100 : undefined,
       },
+      staffPay: staffPayDraft
+        .map((r) => ({ name: (r.name || "").trim(), level: r.level, employmentType: r.employmentType, age: r.age }))
+        .filter((r) => r.name),
+      publicHolidays: document.getElementById("set-publicHolidays").value
+        .split("\n")
+        .map((d) => d.trim())
+        .filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)),
     }),
   });
   await loadSettings();

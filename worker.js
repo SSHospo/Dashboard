@@ -15,20 +15,22 @@
 //   EMPLOYMENT_HERO_CLIENT_ID,
 //   EMPLOYMENT_HERO_CLIENT_SECRET        — optional, from the owner's
 //                                           Employment Hero developer app.
-//                                           Only wires the OAuth connection;
-//                                           see lib/employmenthero.js — the
-//                                           projected Wage % itself isn't
-//                                           computed yet (unverified data
-//                                           shape, see that file's header).
+//                                           Powers the projected Wage %:
+//                                           rostered hours (Employment Hero)
+//                                           x the owner's own award-rate
+//                                           setup (Settings) — see
+//                                           lib/employmenthero.js and
+//                                           lib/awardRates.js.
 //   INGEST_TOKEN                         — optional, protects the guided-
 //                                           upload fallback endpoint
 
 import { hashPassword, verifyPassword, createSessionCookie, verifySessionCookie, CLEAR_SESSION_COOKIE } from "./lib/auth.js";
-import { resolvePeriod, previousPeriodOf, sameLastYearOf, toDateInputValue } from "./lib/periods.js";
-import { computeMetrics, withComparisons } from "./lib/kpi.js";
+import { resolvePeriod, previousPeriodOf, sameLastYearOf, toDateInputValue, localDateAndWeekday } from "./lib/periods.js";
+import { computeMetrics, withComparisons, projectedWagePct, NOT_CONFIGURED } from "./lib/kpi.js";
 import * as xeroAdapter from "./lib/xero.js";
 import * as squareAdapter from "./lib/square.js";
 import * as ehAdapter from "./lib/employmenthero.js";
+import { classifyDayType, hourlyRateFor } from "./lib/awardRates.js";
 
 const DEFAULT_SETTINGS = {
   venueName: "",
@@ -38,6 +40,8 @@ const DEFAULT_SETTINGS = {
   defaultPeriod: "this_week",
   accentColour: "#2a78d6",
   targets: {}, // e.g. { wagePct: 0.30, costOfGoodsPct: 0.30 }
+  staffPay: [], // [{ name, level, employmentType: "casual"|"permanent", age: number|null }] — matched to Employment Hero by name, for the projected Wage % only.
+  publicHolidays: [], // ["YYYY-MM-DD", ...] — owner-maintained; unlisted public holidays are costed as their ordinary weekday/Sat/Sun rate.
 };
 
 function json(data, init = {}) {
@@ -105,6 +109,53 @@ async function getValidEmploymentHeroAccessToken(env, kv) {
   };
   await kv.put("eh:tokens", JSON.stringify(updated));
   return { accessToken: updated.accessToken, organisationId: updated.organisationId };
+}
+
+// Turns real rostered shifts + the owner's own award-rate setup into a
+// single projected labour cost. Never touches real pay-rate data — the
+// owner tells us each staff member's award level/employment type/age once
+// in Settings, and we apply the public Restaurant Industry Award rate table
+// (lib/awardRates.js) to the hours Employment Hero reports.
+//
+// Matching is by name (trimmed, case-insensitive) since that's the only
+// thing a human can type into Settings — Employment Hero's member_id is a
+// UUID, not something the owner can look up. Any shift whose name doesn't
+// match a configured staff member is skipped from the cost total (not
+// guessed at) and reported back so the owner can see exactly who's missing.
+function computeProjectedRosterCost(shifts, staffPay, publicHolidays, timezone) {
+  const byName = new Map();
+  for (const p of staffPay || []) {
+    if (p && p.name) byName.set(p.name.trim().toLowerCase(), p);
+  }
+
+  let cost = 0;
+  const unmatchedNames = new Set();
+
+  for (const shift of shifts) {
+    const name = (shift.member_full_name || "").trim();
+    const startMs = shift.start_time ? Date.parse(shift.start_time) : NaN;
+    const endMs = shift.end_time ? Date.parse(shift.end_time) : NaN;
+    if (!name || !Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) continue;
+
+    const profile = byName.get(name.toLowerCase());
+    if (!profile) {
+      unmatchedNames.add(name);
+      continue;
+    }
+
+    const hours = (endMs - startMs) / (60 * 60 * 1000);
+    const { dateStr, weekday } = localDateAndWeekday(startMs, timezone);
+    const dayType = classifyDayType(dateStr, weekday, publicHolidays);
+    const rate = hourlyRateFor({
+      level: profile.level,
+      employmentType: profile.employmentType,
+      age: profile.age ?? null,
+      dayType,
+    });
+    cost += hours * rate;
+  }
+
+  return { cost, unmatchedNames: [...unmatchedNames] };
 }
 
 async function pullXeroForPeriod(env, kv, period, settings) {
@@ -364,11 +415,47 @@ async function handleApi(request, env, ctx, url) {
       metrics[key].trend = bucketMetrics.map((m) => (typeof m[key] === "number" ? m[key] : null));
     }
 
+    // Projected Wage % — only computed for the CURRENT period (no trend/
+    // comparison history for this one, matching kpi.js's projectedWagePct
+    // signature, which was always designed as a single-period supplement,
+    // not a full tracked metric). Stays NOT_CONFIGURED unless Employment
+    // Hero is connected AND the owner has set up at least one staff pay
+    // profile — never guesses.
+    let projectedWage = { pct: NOT_CONFIGURED, cost: null, unmatchedStaffNames: [] };
+    const ehAuth = await getValidEmploymentHeroAccessToken(env, kv);
+    if (ehAuth && ehAuth.organisationId && settings.staffPay && settings.staffPay.length > 0) {
+      try {
+        const shifts = await ehAdapter.fetchRosteredShifts(
+          ehAuth.accessToken,
+          ehAuth.organisationId,
+          new Date(period.startUTC).toISOString(),
+          new Date(period.endUTC).toISOString()
+        );
+        const { cost, unmatchedNames } = computeProjectedRosterCost(
+          shifts,
+          settings.staffPay,
+          settings.publicHolidays,
+          settings.timezone
+        );
+        const revenueForPct = typeof current.revenue === "number" ? current.revenue : null;
+        projectedWage = {
+          pct: revenueForPct !== null ? projectedWagePct(cost, revenueForPct) : NOT_CONFIGURED,
+          cost,
+          unmatchedStaffNames: unmatchedNames,
+        };
+      } catch (e) {
+        // Don't let a roster-fetch hiccup take down the whole dashboard —
+        // the core Xero/Square numbers above are unaffected either way.
+        projectedWage = { pct: NOT_CONFIGURED, cost: null, unmatchedStaffNames: [], error: String(e) };
+      }
+    }
+
     return json({
       period: { key: periodKey, startUTC: period.startUTC, endUTC: period.endUTC },
       metrics,
+      projectedWage,
       unverified: !(xeroConnected && squareConnected), // reconciliation confirms it via settings, see Milestone 4/5
-      sources: { xero: xeroConnected, square: squareConnected },
+      sources: { xero: xeroConnected, square: squareConnected, employmentHero: !!ehAuth },
       lastSynced: new Date().toISOString(),
     });
   }

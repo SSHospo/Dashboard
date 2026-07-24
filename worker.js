@@ -25,7 +25,7 @@
 //                                           upload fallback endpoint
 
 import { hashPassword, verifyPassword, createSessionCookie, verifySessionCookie, CLEAR_SESSION_COOKIE } from "./lib/auth.js";
-import { resolvePeriod, previousPeriodOf, sameLastYearOf, toDateInputValue, localDateAndWeekday } from "./lib/periods.js";
+import { resolvePeriod, previousPeriodOf, sameLastYearOf, toDateInputValue, localDateAndWeekday, splitRangeByLocalHour } from "./lib/periods.js";
 import { computeMetrics, withComparisons, projectedWagePct, NOT_CONFIGURED } from "./lib/kpi.js";
 import * as xeroAdapter from "./lib/xero.js";
 import * as squareAdapter from "./lib/square.js";
@@ -53,6 +53,17 @@ function json(data, init = {}) {
     ...init,
     headers: { "Content-Type": "application/json", ...(init.headers || {}) },
   });
+}
+
+function round2(n) {
+  return Math.round(n * 100) / 100;
+}
+
+/** "7am" / "12pm" / "11pm" — for the hour-by-hour Sales x Labour table. */
+function formatHourLabel(hour) {
+  const suffix = hour < 12 ? "am" : "pm";
+  const h12 = hour % 12 === 0 ? 12 : hour % 12;
+  return `${h12}${suffix}`;
 }
 
 async function getSettings(kv) {
@@ -160,6 +171,56 @@ function computeProjectedRosterCost(shifts, staffPay, publicHolidays, timezone) 
   }
 
   return { cost, unmatchedNames: [...unmatchedNames] };
+}
+
+// Same idea as computeProjectedRosterCost, but for the hour-by-hour Sales x
+// Labour breakdown: instead of one total, it splits each shift across the
+// local hours it actually covers (splitRangeByLocalHour) and buckets the
+// projected cost into a 24-slot array per department, using the owner's
+// Front of house / Back of house roster-location mapping. A shift at a
+// location the owner hasn't mapped to foh/boh is skipped here — it's
+// already surfaced as an "unmapped location" by the totals block this runs
+// alongside, so it isn't silently double-reported.
+function computeHourlyRosterCost(shifts, staffPay, publicHolidays, timezone, rosterLocationMapping) {
+  const byName = new Map();
+  for (const p of staffPay || []) {
+    if (p && p.name) byName.set(p.name.trim().toLowerCase(), p);
+  }
+
+  const fohByHour = new Array(24).fill(0);
+  const bohByHour = new Array(24).fill(0);
+  const unmatchedNames = new Set();
+
+  for (const shift of shifts) {
+    const name = (shift.member_full_name || "").trim();
+    const startMs = shift.start_time ? Date.parse(shift.start_time) : NaN;
+    const endMs = shift.end_time ? Date.parse(shift.end_time) : NaN;
+    if (!name || !Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) continue;
+
+    const profile = byName.get(name.toLowerCase());
+    if (!profile) {
+      unmatchedNames.add(name);
+      continue;
+    }
+
+    const locationName = shift.location_name || "";
+    const bucket = rosterLocationMapping[locationName];
+    if (bucket !== "foh" && bucket !== "boh") continue;
+    const target = bucket === "foh" ? fohByHour : bohByHour;
+
+    for (const seg of splitRangeByLocalHour(startMs, endMs, timezone)) {
+      const dayType = classifyDayType(seg.dateStr, seg.weekday, publicHolidays);
+      const rate = hourlyRateFor({
+        level: profile.level,
+        employmentType: profile.employmentType,
+        age: profile.age ?? null,
+        dayType,
+      });
+      target[seg.hour] += seg.durationHours * rate;
+    }
+  }
+
+  return { fohByHour, bohByHour, unmatchedNames: [...unmatchedNames] };
 }
 
 async function pullXeroForPeriod(env, kv, period, settings) {
@@ -527,25 +588,46 @@ async function handleApi(request, env, ctx, url) {
       unmappedLocations: [],
       sources: { square: !!env.SQUARE_ACCESS_TOKEN, employmentHero: false },
       errors: [],
+      // Hour-by-hour Sales x Labour, 7am-11pm, filled in below. labourCost
+      // stays null per hour until Staff pay setup has at least one person in
+      // it (hourlyLabourConfigured) — same "never guess" rule as the
+      // projected Wage % on the main board.
+      hourly: [],
+      hourlyLabourConfigured: false,
+      averagedOverDays: 1,
     };
+
+    const hourlyFohSales = new Array(24).fill(0);
+    const hourlyBohSales = new Array(24).fill(0);
+    let hourlyFohLabour = new Array(24).fill(0);
+    let hourlyBohLabour = new Array(24).fill(0);
 
     if (env.SQUARE_ACCESS_TOKEN) {
       try {
         const locationIds = await resolveSquareLocationIds(env);
         const catalog = await squareAdapter.fetchCatalogCategoryMap(env.SQUARE_ACCESS_TOKEN);
-        const centsByCategory = await squareAdapter.fetchLineItemSalesByCategory(
+        const hourlyCentsByCategory = await squareAdapter.fetchLineItemSalesByCategoryHourly(
           env.SQUARE_ACCESS_TOKEN,
           locationIds,
           new Date(period.startUTC).toISOString(),
           new Date(period.endUTC).toISOString(),
-          catalog.categoryNameByVariationId
+          catalog.categoryNameByVariationId,
+          settings.timezone
         );
         const unmapped = new Set();
-        for (const [categoryName, cents] of centsByCategory) {
-          const bucket = mapping.squareCategories[categoryName];
-          if (bucket === "foh") result.foh.sales += cents / 100;
-          else if (bucket === "boh") result.boh.sales += cents / 100;
-          else if (bucket !== "neither") unmapped.add(categoryName);
+        for (const [hour, centsByCategory] of hourlyCentsByCategory) {
+          for (const [categoryName, cents] of centsByCategory) {
+            const bucket = mapping.squareCategories[categoryName];
+            if (bucket === "foh") {
+              result.foh.sales += cents / 100;
+              hourlyFohSales[hour] += cents / 100;
+            } else if (bucket === "boh") {
+              result.boh.sales += cents / 100;
+              hourlyBohSales[hour] += cents / 100;
+            } else if (bucket !== "neither") {
+              unmapped.add(categoryName);
+            }
+          }
         }
         result.unmappedCategories = [...unmapped];
       } catch (e) {
@@ -576,6 +658,19 @@ async function handleApi(request, env, ctx, url) {
           else if (bucket !== "neither" && locationName) unmapped.add(locationName);
         }
         result.unmappedLocations = [...unmapped];
+
+        if (settings.staffPay && settings.staffPay.length > 0) {
+          result.hourlyLabourConfigured = true;
+          const hourlyCost = computeHourlyRosterCost(
+            shifts,
+            settings.staffPay,
+            settings.publicHolidays,
+            settings.timezone,
+            mapping.rosterLocations
+          );
+          hourlyFohLabour = hourlyCost.fohByHour;
+          hourlyBohLabour = hourlyCost.bohByHour;
+        }
       } catch (e) {
         result.errors.push(`Employment Hero: ${String(e)}`);
       }
@@ -583,6 +678,30 @@ async function handleApi(request, env, ctx, url) {
 
     result.foh.salesPerLabourHour = result.foh.hours > 0 ? result.foh.sales / result.foh.hours : null;
     result.boh.salesPerLabourHour = result.boh.hours > 0 ? result.boh.sales / result.boh.hours : null;
+
+    // Average per hour-of-day across the days actually covered so far. For a
+    // period that's still running (e.g. "this week" on a Wednesday), divide
+    // by the days elapsed, not the full nominal length — otherwise a
+    // half-finished week would look artificially quiet every hour.
+    const daysElapsed = Math.max(
+      1,
+      Math.round((Math.min(period.endUTC, Date.now()) - period.startUTC) / (24 * 60 * 60 * 1000))
+    );
+    result.averagedOverDays = daysElapsed;
+    for (let hour = 7; hour <= 23; hour++) {
+      result.hourly.push({
+        hour,
+        label: formatHourLabel(hour),
+        foh: {
+          sales: round2(hourlyFohSales[hour] / daysElapsed),
+          labourCost: result.hourlyLabourConfigured ? round2(hourlyFohLabour[hour] / daysElapsed) : null,
+        },
+        boh: {
+          sales: round2(hourlyBohSales[hour] / daysElapsed),
+          labourCost: result.hourlyLabourConfigured ? round2(hourlyBohLabour[hour] / daysElapsed) : null,
+        },
+      });
+    }
 
     return json(result);
   }

@@ -162,6 +162,15 @@
   }
   .muted-note{font-size:11.5px;color:var(--muted);margin-top:8px;}
 
+  .sub-metric-link{font-size:12px;color:var(--ink);text-decoration:underline;cursor:pointer;margin-top:8px;display:inline-block;}
+  .dept-map-row{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:6px 0;border-bottom:1px solid var(--border);}
+  .dept-map-name{font-size:13px;}
+  .dept-map-row select{width:auto;flex:0 0 150px;margin-bottom:0;}
+  .dept-breakdown-row{border-bottom:1px solid var(--border);padding:12px 0;}
+  .dept-breakdown-label{font-weight:700;font-size:13px;margin-bottom:6px;}
+  .dept-breakdown-figures{display:flex;gap:18px;flex-wrap:wrap;font-size:13px;color:var(--muted);}
+  .dept-breakdown-splh{font-weight:700;color:var(--ink);}
+
   .settings-subhead{font-size:13px;font-weight:700;margin:18px 0 8px;color:var(--ink);}
   .settings-subhead .hint{font-weight:400;color:var(--muted);font-size:11.5px;display:block;margin-top:2px;}
   .staffpay-row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px;padding-bottom:10px;border-bottom:1px solid var(--border);}
@@ -235,6 +244,12 @@
 
   <div id="cards-root"></div>
 
+  <div class="card" id="department-panel" style="display:none;">
+    <h2>Front of house / Back of house &mdash; Sales per Labour Hour</h2>
+    <p class="muted-note">Square sales by category (includes GST &mdash; a different basis from your Revenue above, never the same figure) &divide; rostered hours from Employment Hero, for the same period as the cards above. Set up the mapping in Settings if this looks empty.</p>
+    <div id="department-panel-body">Loading&hellip;</div>
+  </div>
+
   <div class="grid panel-grid">
     <div class="card">
       <h2>Connections</h2>
@@ -298,6 +313,13 @@
       <label>Public holidays (one date per line, YYYY-MM-DD)</label>
       <textarea id="set-publicHolidays" rows="3" placeholder="2026-12-25&#10;2026-12-26&#10;2027-01-01"></textarea>
       <p class="muted-note">A name here must match Employment Hero exactly, or that person's shifts won't be counted — you'll see a note under Wage % if that happens. Dates left off this list are still costed at their normal weekday/Saturday/Sunday rate, just without the public holiday loading.</p>
+
+      <h3 class="settings-subhead">Front of house / Back of house mapping
+        <span class="hint">For the Sales per Labour Hour breakdown. Your real Square categories and roster locations, so nothing here is guessed.</span>
+      </h3>
+      <div id="department-mapping-body">
+        <p class="muted-note">Opens this panel to load &mdash; click Settings again if you don't see your categories.</p>
+      </div>
 
       <button id="settings-save">Save settings</button>
       <p class="muted-note">Trading-day rollover and timezone were set during the build — ask if these ever need to change.</p>
@@ -374,6 +396,66 @@ document.getElementById("staffpay-add").addEventListener("click", () => {
   staffPayDraft.push({ id: staffPayIdCounter++, name: "", level: "level1", employmentType: "casual", age: null });
   renderStaffPayRows();
 });
+
+// Front of house / Back of house mapping — draft state mirrors
+// settings.departmentMapping, edited in place by the <select> change
+// handlers below, sent whole on Save settings (same pattern as staffPay).
+let departmentMappingDraft = { squareCategories: {}, rosterLocations: {} };
+
+function departmentSelectHtml(name, group) {
+  const current = departmentMappingDraft[group][name] || "";
+  const safeName = name.replace(/"/g, "&quot;");
+  return `
+    <div class="dept-map-row">
+      <span class="dept-map-name">${name}</span>
+      <select class="dept-map-select" data-group="${group}" data-name="${safeName}">
+        <option value="" ${current === "" ? "selected" : ""}>Not set</option>
+        <option value="foh" ${current === "foh" ? "selected" : ""}>Front of house</option>
+        <option value="boh" ${current === "boh" ? "selected" : ""}>Back of house</option>
+        <option value="neither" ${current === "neither" ? "selected" : ""}>Neither / ignore</option>
+      </select>
+    </div>`;
+}
+
+function renderDepartmentMapping(opts) {
+  const body = document.getElementById("department-mapping-body");
+  const catRows = (opts.squareCategories || []).length
+    ? opts.squareCategories.map((c) => departmentSelectHtml(c, "squareCategories")).join("")
+    : `<p class="muted-note">No Square categories found — items may not be categorised in Square yet.</p>`;
+  const locRows = (opts.rosterLocations || []).length
+    ? opts.rosterLocations.map((l) => departmentSelectHtml(l, "rosterLocations")).join("")
+    : `<p class="muted-note">No roster locations found in the last 30 days.</p>`;
+  const errors = (opts.errors || []).length ? `<p class="sub-metric-warn">${opts.errors.join("<br>")}</p>` : "";
+  body.innerHTML = `
+    <p class="muted-note"><b>Square categories</b> &mdash; made/sold by front of house or the kitchen?</p>
+    ${catRows}
+    <p class="muted-note" style="margin-top:14px;"><b>Roster locations</b> &mdash; from Employment Hero, last 30 days.</p>
+    ${locRows}
+    ${errors}
+  `;
+  body.querySelectorAll(".dept-map-select").forEach((sel) => {
+    sel.addEventListener("change", (e) => {
+      const { group, name } = e.target.dataset;
+      if (e.target.value) departmentMappingDraft[group][name] = e.target.value;
+      else delete departmentMappingDraft[group][name];
+    });
+  });
+}
+
+async function loadDepartmentOptions() {
+  departmentMappingDraft = {
+    squareCategories: { ...((currentSettings.departmentMapping || {}).squareCategories || {}) },
+    rosterLocations: { ...((currentSettings.departmentMapping || {}).rosterLocations || {}) },
+  };
+  const body = document.getElementById("department-mapping-body");
+  body.innerHTML = `<p class="muted-note">Loading your real Square categories and roster locations&hellip;</p>`;
+  try {
+    const opts = await api("/api/department-options");
+    renderDepartmentMapping(opts);
+  } catch (err) {
+    body.innerHTML = `<p class="muted-note">Couldn't load categories/locations: ${err.message}</p>`;
+  }
+}
 
 let currentPeriod = "this_week";
 let currentSettings = {};
@@ -668,6 +750,7 @@ function renderPeriodButtons() {
       customRangeError = "";
       renderPeriodButtons();
       loadData();
+      refreshDepartmentPanelIfOpen();
     });
   });
 
@@ -681,6 +764,7 @@ function renderPeriodButtons() {
     customRangeError = "";
     renderPeriodButtons();
     loadData();
+    refreshDepartmentPanelIfOpen();
   });
 
   const applyBtn = document.getElementById("custom-apply-btn");
@@ -703,8 +787,17 @@ function renderPeriodButtons() {
       customRangeError = "";
       renderPeriodButtons();
       loadData();
+      refreshDepartmentPanelIfOpen();
     });
   }
+}
+
+// Keep the FOH/BOH panel's figures matching whatever period is selected —
+// only refetches if the panel is actually open, so switching periods stays
+// cheap when nobody's looking at this breakdown.
+function refreshDepartmentPanelIfOpen() {
+  const panel = document.getElementById("department-panel");
+  if (panel && panel.style.display !== "none") loadDepartmentBreakdown();
 }
 
 function cardHtml({ eyebrow, alertClass, figureMain, figureSub, figureLabels, compareRows, extraRows, trendLabel, trendHtml, source, drives, diagnosis, subMetric }) {
@@ -808,7 +901,7 @@ function renderCards(metrics, projectedWage, sources) {
       compareRows: ptsCompareRow(labels.prev, wagePct.vsPrevious, "down") + ptsCompareRow(labels.ly, wagePct.vsLastYear, "down"),
       source: "Wages plus super, as a share of revenue &middot; from Xero",
       diagnosis: diagWage(metrics, targets),
-      subMetric: projectedWageSubMetricHtml(projectedWage, sources),
+      subMetric: projectedWageSubMetricHtml(projectedWage, sources) + `<div class="sub-metric-link" id="dept-breakdown-toggle">See Front of House / Back of House breakdown &rarr;</div>`,
     })}
     ${cardHtml({
       eyebrow: "OVERHEADS",
@@ -897,7 +990,9 @@ async function loadSettings() {
 
 document.getElementById("settings-toggle").addEventListener("click", () => {
   const p = document.getElementById("settings-panel");
-  p.style.display = p.style.display === "none" ? "flex" : "none";
+  const opening = p.style.display === "none";
+  p.style.display = opening ? "flex" : "none";
+  if (opening) loadDepartmentOptions();
 });
 
 document.getElementById("settings-save").addEventListener("click", async () => {
@@ -925,11 +1020,68 @@ document.getElementById("settings-save").addEventListener("click", async () => {
         .split("\n")
         .map((d) => d.trim())
         .filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(d)),
+      departmentMapping: departmentMappingDraft,
     }),
   });
   await loadSettings();
   await loadData();
 });
+
+// The Wage % card (and its toggle link) gets rebuilt from scratch on every
+// renderCards() call, so the click listener lives on a stable parent
+// instead of the link itself.
+document.addEventListener("click", (e) => {
+  if (e.target && e.target.id === "dept-breakdown-toggle") {
+    const panel = document.getElementById("department-panel");
+    const opening = panel.style.display === "none";
+    panel.style.display = opening ? "block" : "none";
+    if (opening) loadDepartmentBreakdown();
+  }
+});
+
+function departmentBreakdownRowHtml(label, d) {
+  return `<div class="dept-breakdown-row">
+    <div class="dept-breakdown-label">${label}</div>
+    <div class="dept-breakdown-figures">
+      <span>${fmt("money", d.sales)} Square sales</span>
+      <span>${d.hours.toFixed(1)} hours</span>
+      <span class="dept-breakdown-splh">${d.salesPerLabourHour != null ? fmt("money", d.salesPerLabourHour) + "/hr" : "—"}</span>
+    </div>
+  </div>`;
+}
+
+function departmentBreakdownHtml(data) {
+  const warnings = [];
+  if (!data.sources.square) warnings.push("Square isn't connected — no sales figures.");
+  if (!data.sources.employmentHero) warnings.push("Employment Hero isn't connected — no hours figures.");
+  if (data.unmappedCategories && data.unmappedCategories.length) {
+    warnings.push(`Not mapped yet (Square categories): ${data.unmappedCategories.join(", ")} — add them in Settings.`);
+  }
+  if (data.unmappedLocations && data.unmappedLocations.length) {
+    warnings.push(`Not mapped yet (roster locations): ${data.unmappedLocations.join(", ")} — add them in Settings.`);
+  }
+  if (data.errors && data.errors.length) warnings.push(...data.errors);
+
+  return `
+    ${departmentBreakdownRowHtml("Front of house", data.foh)}
+    ${departmentBreakdownRowHtml("Back of house", data.boh)}
+    ${warnings.length ? `<div class="sub-metric-warn">${warnings.join("<br>")}</div>` : ""}
+  `;
+}
+
+async function loadDepartmentBreakdown() {
+  const body = document.getElementById("department-panel-body");
+  body.innerHTML = "Loading&hellip;";
+  const query = currentPeriod === "custom"
+    ? `period=custom&start=${encodeURIComponent(customStart)}&end=${encodeURIComponent(customEnd)}`
+    : `period=${currentPeriod}`;
+  try {
+    const data = await api(`/api/department-breakdown?${query}`);
+    body.innerHTML = departmentBreakdownHtml(data);
+  } catch (err) {
+    body.innerHTML = `<p class="sub-metric-warn">Couldn't load this: ${err.message}</p>`;
+  }
+}
 
 async function boot() {
   const session = await api("/api/session");

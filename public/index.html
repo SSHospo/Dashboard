@@ -170,6 +170,14 @@
   .dept-breakdown-label{font-weight:700;font-size:13px;margin-bottom:6px;}
   .dept-breakdown-figures{display:flex;gap:18px;flex-wrap:wrap;font-size:13px;color:var(--muted);}
   .dept-breakdown-splh{font-weight:700;color:var(--ink);}
+  .dept-hourly-wrap{margin-top:18px;}
+  .dept-hourly-wrap .dept-breakdown-label{margin-bottom:10px;}
+  .dept-hourly-scroll{overflow-x:auto;}
+  .dept-hourly-table{width:100%;border-collapse:collapse;font-size:12.5px;white-space:nowrap;}
+  .dept-hourly-table th{text-align:right;font-weight:700;color:var(--muted);font-size:11px;padding:6px 8px;border-bottom:1px solid var(--border);}
+  .dept-hourly-table th:first-child,.dept-hourly-table td:first-child{text-align:left;}
+  .dept-hourly-table td{text-align:right;padding:6px 8px;border-bottom:1px solid var(--border);color:var(--ink);}
+  .dept-hourly-note{font-size:11.5px;color:var(--muted);margin-top:8px;}
 
   .settings-subhead{font-size:13px;font-weight:700;margin:18px 0 8px;color:var(--ink);}
   .settings-subhead .hint{font-weight:400;color:var(--muted);font-size:11.5px;display:block;margin-top:2px;}
@@ -1050,6 +1058,51 @@ function departmentBreakdownRowHtml(label, d) {
   </div>`;
 }
 
+// Hour-by-hour Sales x Labour, 7am-11pm. Sales come straight from Square
+// (GST included, same "not the same as Revenue" caveat as the totals
+// above). Labour is a projected $ cost (Employment Hero hours x the
+// owner's award-rate setup) — stays "—" until Staff pay setup has at least
+// one person in it, same rule as the projected Wage % card.
+function departmentHourlyTableHtml(data) {
+  const rows = data.hourly || [];
+  if (!rows.length) return "";
+  const dayNote = data.averagedOverDays > 1
+    ? `Averaged per hour across the ${data.averagedOverDays} days in this period.`
+    : `Today's figures so far, by hour.`;
+  const labourNote = data.hourlyLabourConfigured
+    ? ""
+    : ` Labour cost per hour needs Staff pay setup in Settings — showing sales only until then.`;
+  const body = rows.map((r) => `
+    <tr>
+      <td>${r.label}</td>
+      <td>${fmt("money", r.foh.sales)}</td>
+      <td>${r.foh.labourCost != null ? fmt("money", r.foh.labourCost) : "—"}</td>
+      <td>${fmt("money", r.boh.sales)}</td>
+      <td>${r.boh.labourCost != null ? fmt("money", r.boh.labourCost) : "—"}</td>
+    </tr>
+  `).join("");
+  return `
+    <div class="dept-hourly-wrap">
+      <div class="dept-breakdown-label">Hour by hour &mdash; Sales x Labour</div>
+      <div class="dept-hourly-scroll">
+        <table class="dept-hourly-table">
+          <thead>
+            <tr>
+              <th>Hour</th>
+              <th>FOH sales</th>
+              <th>FOH labour $</th>
+              <th>BOH sales</th>
+              <th>BOH labour $</th>
+            </tr>
+          </thead>
+          <tbody>${body}</tbody>
+        </table>
+      </div>
+      <p class="dept-hourly-note">${dayNote}${labourNote}</p>
+    </div>
+  `;
+}
+
 function departmentBreakdownHtml(data) {
   const warnings = [];
   if (!data.sources.square) warnings.push("Square isn't connected — no sales figures.");
@@ -1066,6 +1119,7 @@ function departmentBreakdownHtml(data) {
     ${departmentBreakdownRowHtml("Front of house", data.foh)}
     ${departmentBreakdownRowHtml("Back of house", data.boh)}
     ${warnings.length ? `<div class="sub-metric-warn">${warnings.join("<br>")}</div>` : ""}
+    ${departmentHourlyTableHtml(data)}
   `;
 }
 

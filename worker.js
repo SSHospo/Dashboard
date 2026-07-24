@@ -42,6 +42,10 @@ const DEFAULT_SETTINGS = {
   targets: {}, // e.g. { wagePct: 0.30, costOfGoodsPct: 0.30 }
   staffPay: [], // [{ name, level, employmentType: "casual"|"permanent", age: number|null }] — matched to Employment Hero by name, for the projected Wage % only.
   publicHolidays: [], // ["YYYY-MM-DD", ...] — owner-maintained; unlisted public holidays are costed as their ordinary weekday/Sat/Sun rate.
+  departmentMapping: {
+    squareCategories: {}, // { "Coffee": "foh", "Food": "boh", ... } — values: "foh" | "boh" | "neither"
+    rosterLocations: {}, // { "Kitchen": "boh", "Front House": "foh", ... } — same value set
+  },
 };
 
 function json(data, init = {}) {
@@ -458,6 +462,129 @@ async function handleApi(request, env, ctx, url) {
       sources: { xero: xeroConnected, square: squareConnected, employmentHero: !!ehAuth },
       lastSynced: new Date().toISOString(),
     });
+  }
+
+  // Real, current Square category names + roster location names, for the
+  // Settings "Front of house / Back of house mapping" UI. Never hardcode
+  // these — they're the owner's own naming, fetched fresh each time the
+  // panel opens so a renamed or newly-added category/location shows up
+  // without needing a rebuild.
+  if (path === "/api/department-options" && request.method === "GET") {
+    const options = { squareCategories: [], rosterLocations: [], errors: [] };
+
+    if (env.SQUARE_ACCESS_TOKEN) {
+      try {
+        const catalog = await squareAdapter.fetchCatalogCategoryMap(env.SQUARE_ACCESS_TOKEN);
+        options.squareCategories = catalog.categoryNames.sort();
+      } catch (e) {
+        options.errors.push(`Square categories: ${String(e)}`);
+      }
+    }
+
+    const ehAuth = await getValidEmploymentHeroAccessToken(env, kv);
+    if (ehAuth && ehAuth.organisationId) {
+      try {
+        // 30-day lookback so an infrequently-rostered location still shows.
+        const to = new Date();
+        const from = new Date(to.getTime() - 30 * 24 * 60 * 60 * 1000);
+        const shifts = await ehAdapter.fetchRosteredShifts(
+          ehAuth.accessToken,
+          ehAuth.organisationId,
+          from.toISOString(),
+          to.toISOString()
+        );
+        options.rosterLocations = [...new Set(shifts.map((s) => s.location_name).filter(Boolean))].sort();
+      } catch (e) {
+        options.errors.push(`Employment Hero locations: ${String(e)}`);
+      }
+    }
+
+    return json(options);
+  }
+
+  // Sales-per-labour-hour by department — a separate optional-extra
+  // endpoint (kpi-spec.md's "Optional extras" section), deliberately NOT
+  // folded into /api/data: it's a different basis (Square sales, GST
+  // included) from the locked, Xero-only core metrics, and it's heavier
+  // (extra Square catalog + order fetches, extra Employment Hero fetch) so
+  // it only runs when the owner actually opens this panel, not on every
+  // dashboard load.
+  if (path === "/api/department-breakdown" && request.method === "GET") {
+    const settings = await getSettings(kv);
+    const periodKey = url.searchParams.get("period") || settings.defaultPeriod;
+    const custom =
+      periodKey === "custom"
+        ? { start: url.searchParams.get("start"), end: url.searchParams.get("end") }
+        : null;
+    const period = resolvePeriod(periodKey, settings, Date.now(), custom);
+    const mapping = settings.departmentMapping || { squareCategories: {}, rosterLocations: {} };
+
+    const result = {
+      period: { key: periodKey, startUTC: period.startUTC, endUTC: period.endUTC },
+      foh: { sales: 0, hours: 0, salesPerLabourHour: null },
+      boh: { sales: 0, hours: 0, salesPerLabourHour: null },
+      unmappedCategories: [],
+      unmappedLocations: [],
+      sources: { square: !!env.SQUARE_ACCESS_TOKEN, employmentHero: false },
+      errors: [],
+    };
+
+    if (env.SQUARE_ACCESS_TOKEN) {
+      try {
+        const locationIds = await resolveSquareLocationIds(env);
+        const catalog = await squareAdapter.fetchCatalogCategoryMap(env.SQUARE_ACCESS_TOKEN);
+        const centsByCategory = await squareAdapter.fetchLineItemSalesByCategory(
+          env.SQUARE_ACCESS_TOKEN,
+          locationIds,
+          new Date(period.startUTC).toISOString(),
+          new Date(period.endUTC).toISOString(),
+          catalog.categoryNameByVariationId
+        );
+        const unmapped = new Set();
+        for (const [categoryName, cents] of centsByCategory) {
+          const bucket = mapping.squareCategories[categoryName];
+          if (bucket === "foh") result.foh.sales += cents / 100;
+          else if (bucket === "boh") result.boh.sales += cents / 100;
+          else if (bucket !== "neither") unmapped.add(categoryName);
+        }
+        result.unmappedCategories = [...unmapped];
+      } catch (e) {
+        result.errors.push(`Square: ${String(e)}`);
+      }
+    }
+
+    const ehAuth = await getValidEmploymentHeroAccessToken(env, kv);
+    result.sources.employmentHero = !!ehAuth;
+    if (ehAuth && ehAuth.organisationId) {
+      try {
+        const shifts = await ehAdapter.fetchRosteredShifts(
+          ehAuth.accessToken,
+          ehAuth.organisationId,
+          new Date(period.startUTC).toISOString(),
+          new Date(period.endUTC).toISOString()
+        );
+        const unmapped = new Set();
+        for (const shift of shifts) {
+          const startMs = shift.start_time ? Date.parse(shift.start_time) : NaN;
+          const endMs = shift.end_time ? Date.parse(shift.end_time) : NaN;
+          if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) continue;
+          const hours = (endMs - startMs) / (60 * 60 * 1000);
+          const locationName = shift.location_name || "";
+          const bucket = mapping.rosterLocations[locationName];
+          if (bucket === "foh") result.foh.hours += hours;
+          else if (bucket === "boh") result.boh.hours += hours;
+          else if (bucket !== "neither" && locationName) unmapped.add(locationName);
+        }
+        result.unmappedLocations = [...unmapped];
+      } catch (e) {
+        result.errors.push(`Employment Hero: ${String(e)}`);
+      }
+    }
+
+    result.foh.salesPerLabourHour = result.foh.hours > 0 ? result.foh.sales / result.foh.hours : null;
+    result.boh.salesPerLabourHour = result.boh.hours > 0 ? result.boh.sales / result.boh.hours : null;
+
+    return json(result);
   }
 
   if (path === "/api/ingest" && request.method === "POST") {

@@ -441,6 +441,32 @@ async function handleApi(request, env, ctx, url) {
     return Response.redirect(`${url.origin}/?connected=employmenthero`, 302);
   }
 
+  // TEMPORARY, 25 Jul 2026 — investigating a real bug: the hourly Sales x
+  // Labour panel is showing staff cost on the wrong hours (looks shifted by
+  // roughly Sydney's UTC offset vs the owner's real roster). The code has
+  // always assumed Employment Hero's rostered_shifts start_time/end_time are
+  // full UTC instants (with a "Z"), but that was never actually confirmed
+  // against a raw response — this route dumps a couple of real shifts
+  // exactly as Employment Hero returns them (still behind the login,
+  // read-only, nothing written) so that can be checked properly instead of
+  // guessed at. Delete this route once that's confirmed and the real fix is
+  // in.
+  if (path === "/api/debug/employmenthero-shifts" && request.method === "GET") {
+    const ehAuth = await getValidEmploymentHeroAccessToken(env, kv);
+    if (!ehAuth || !ehAuth.organisationId) {
+      return json({ error: "Employment Hero not connected" }, { status: 400 });
+    }
+    const to = new Date();
+    const from = new Date(to.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const shifts = await ehAdapter.fetchRosteredShifts(ehAuth.accessToken, ehAuth.organisationId, from.toISOString(), to.toISOString());
+    return json({
+      note: "Raw shift objects exactly as Employment Hero returned them — no conversion applied.",
+      dashboardTimezoneSetting: (await getSettings(kv)).timezone,
+      count: shifts.length,
+      sample: shifts.slice(0, 3),
+    });
+  }
+
   if (path === "/api/data" && request.method === "GET") {
     const settings = await getSettings(kv);
     const periodKey = url.searchParams.get("period") || settings.defaultPeriod;

@@ -178,6 +178,7 @@
   .dept-hourly-table th.dept-hourly-hourcol,.dept-hourly-table td:first-child{text-align:left;}
   .dept-hourly-table th.dept-hourly-group{text-align:center;}
   .dept-hourly-table td{text-align:right;padding:6px 8px;border-bottom:1px solid var(--border);color:var(--ink);}
+  .dept-hourly-total-row td{font-weight:700;border-top:2px solid var(--ink);border-bottom:none;}
   .dept-hourly-note{font-size:11.5px;color:var(--muted);margin-top:8px;}
 
   .settings-subhead{font-size:13px;font-weight:700;margin:18px 0 8px;color:var(--ink);}
@@ -1095,6 +1096,31 @@ function departmentHourlyTableHtml(data) {
       <td>${wagesPct(r.boh.labourCost, r.boh.sales)}</td>
     </tr>
   `).join("");
+
+  // Totals row — sums the figures actually shown in the table above, so it
+  // matches what the owner sees rather than the full period's raw total
+  // (which would double-count against the averaging note under the table
+  // when the period covers more than one day). Wages % here is total
+  // Staff($) ÷ total Net sales, not an average of the per-hour percentages
+  // (averaging percentages would be meaningless — an hour with $0 sales but
+  // a 100% figure would skew it).
+  const fohSalesTotal = rows.reduce((s, r) => s + r.foh.sales, 0);
+  const bohSalesTotal = rows.reduce((s, r) => s + r.boh.sales, 0);
+  const fohLabourTotal = data.hourlyLabourConfigured ? rows.reduce((s, r) => s + r.foh.labourCost, 0) : null;
+  const bohLabourTotal = data.hourlyLabourConfigured ? rows.reduce((s, r) => s + r.boh.labourCost, 0) : null;
+  const totalLabel = data.averagedOverDays > 1 ? "Total (avg day)" : "Total";
+  const totalsRow = `
+    <tr class="dept-hourly-total-row">
+      <td>${totalLabel}</td>
+      <td>${fmt("money", fohSalesTotal)}</td>
+      <td>${fohLabourTotal != null ? fmt("money", fohLabourTotal) : "—"}</td>
+      <td>${wagesPct(fohLabourTotal, fohSalesTotal)}</td>
+      <td>${fmt("money", bohSalesTotal)}</td>
+      <td>${bohLabourTotal != null ? fmt("money", bohLabourTotal) : "—"}</td>
+      <td>${wagesPct(bohLabourTotal, bohSalesTotal)}</td>
+    </tr>
+  `;
+
   return `
     <div class="dept-hourly-wrap">
       <div class="dept-breakdown-label">Hour by hour &mdash; Sales x Labour</div>
@@ -1116,6 +1142,7 @@ function departmentHourlyTableHtml(data) {
             </tr>
           </thead>
           <tbody>${body}</tbody>
+          <tfoot>${totalsRow}</tfoot>
         </table>
       </div>
       <p class="dept-hourly-note">${dayNote}${labourNote}</p>

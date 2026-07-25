@@ -175,7 +175,8 @@
   .dept-hourly-scroll{overflow-x:auto;}
   .dept-hourly-table{width:100%;border-collapse:collapse;font-size:12.5px;white-space:nowrap;}
   .dept-hourly-table th{text-align:right;font-weight:700;color:var(--muted);font-size:11px;padding:6px 8px;border-bottom:1px solid var(--border);}
-  .dept-hourly-table th:first-child,.dept-hourly-table td:first-child{text-align:left;}
+  .dept-hourly-table th.dept-hourly-hourcol,.dept-hourly-table td:first-child{text-align:left;}
+  .dept-hourly-table th.dept-hourly-group{text-align:center;}
   .dept-hourly-table td{text-align:right;padding:6px 8px;border-bottom:1px solid var(--border);color:var(--ink);}
   .dept-hourly-note{font-size:11.5px;color:var(--muted);margin-top:8px;}
 
@@ -1058,11 +1059,18 @@ function departmentBreakdownRowHtml(label, d) {
   </div>`;
 }
 
-// Hour-by-hour Sales x Labour, 7am-11pm. Sales come straight from Square
-// (GST included, same "not the same as Revenue" caveat as the totals
-// above). Labour is a projected $ cost (Employment Hero hours x the
-// owner's award-rate setup) — stays "—" until Staff pay setup has at least
-// one person in it, same rule as the projected Wage % card.
+// Hour-by-hour Sales x Labour, 7am-11pm, laid out the way the owner sketched
+// it on paper: Net sales / Staff roster ($) / Wages % per department, one
+// row per hour (his original sketch used weekday rows — he asked for hour
+// rows instead, matching the "every hour" request this whole panel is for).
+// Sales come straight from Square (GST included, same "not the same as
+// Revenue" caveat as the totals above). Staff $ is a projected cost
+// (Employment Hero hours x the owner's award-rate setup) — stays "—" until
+// Staff pay setup has at least one person in it, same rule as the projected
+// Wage % card up top. Wages % here = Staff($) ÷ Net sales for that
+// department/hour — a DIFFERENT figure from the real Wage % card above
+// (that one's Xero-based and locked; this one's Square-based and only
+// exists for this panel), so it's labelled distinctly, never just "Wage %".
 function departmentHourlyTableHtml(data) {
   const rows = data.hourly || [];
   if (!rows.length) return "";
@@ -1071,14 +1079,20 @@ function departmentHourlyTableHtml(data) {
     : `Today's figures so far, by hour.`;
   const labourNote = data.hourlyLabourConfigured
     ? ""
-    : ` Labour cost per hour needs Staff pay setup in Settings — showing sales only until then.`;
+    : ` Staff $ per hour needs Staff pay setup in Settings — showing sales only until then.`;
+  const wagesPct = (labourCost, sales) => {
+    if (labourCost == null || !(sales > 0)) return "—";
+    return fmt("percent", labourCost / sales);
+  };
   const body = rows.map((r) => `
     <tr>
       <td>${r.label}</td>
       <td>${fmt("money", r.foh.sales)}</td>
       <td>${r.foh.labourCost != null ? fmt("money", r.foh.labourCost) : "—"}</td>
+      <td>${wagesPct(r.foh.labourCost, r.foh.sales)}</td>
       <td>${fmt("money", r.boh.sales)}</td>
       <td>${r.boh.labourCost != null ? fmt("money", r.boh.labourCost) : "—"}</td>
+      <td>${wagesPct(r.boh.labourCost, r.boh.sales)}</td>
     </tr>
   `).join("");
   return `
@@ -1088,11 +1102,17 @@ function departmentHourlyTableHtml(data) {
         <table class="dept-hourly-table">
           <thead>
             <tr>
-              <th>Hour</th>
-              <th>FOH sales</th>
-              <th>FOH labour $</th>
-              <th>BOH sales</th>
-              <th>BOH labour $</th>
+              <th rowspan="2" class="dept-hourly-hourcol">Hour</th>
+              <th colspan="3" class="dept-hourly-group">Front of house</th>
+              <th colspan="3" class="dept-hourly-group">Back of house</th>
+            </tr>
+            <tr>
+              <th>Net sales</th>
+              <th>Staff roster ($)</th>
+              <th>Wages %</th>
+              <th>Net sales</th>
+              <th>Staff roster ($)</th>
+              <th>Wages %</th>
             </tr>
           </thead>
           <tbody>${body}</tbody>
@@ -1112,6 +1132,9 @@ function departmentBreakdownHtml(data) {
   }
   if (data.unmappedLocations && data.unmappedLocations.length) {
     warnings.push(`Not mapped yet (roster locations): ${data.unmappedLocations.join(", ")} — add them in Settings.`);
+  }
+  if (data.unmatchedStaffNames && data.unmatchedStaffNames.length) {
+    warnings.push(`Staff $ figures skip these names — not in Staff pay setup, or spelled differently there than in Employment Hero: ${data.unmatchedStaffNames.join(", ")}. Their shifts' sales still count, just not their labour cost, until this is fixed in Settings.`);
   }
   if (data.errors && data.errors.length) warnings.push(...data.errors);
 

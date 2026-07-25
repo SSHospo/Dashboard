@@ -586,6 +586,7 @@ async function handleApi(request, env, ctx, url) {
       boh: { sales: 0, hours: 0, salesPerLabourHour: null },
       unmappedCategories: [],
       unmappedLocations: [],
+      unmatchedStaffNames: [],
       sources: { square: !!env.SQUARE_ACCESS_TOKEN, employmentHero: false },
       errors: [],
       // Hour-by-hour Sales x Labour, 7am-11pm, filled in below. labourCost
@@ -670,6 +671,17 @@ async function handleApi(request, env, ctx, url) {
           );
           hourlyFohLabour = hourlyCost.fohByHour;
           hourlyBohLabour = hourlyCost.bohByHour;
+          // BUG FIX 24 Jul 2026: this was computed but silently dropped —
+          // any shift whose staff member isn't in Staff pay setup yet (or
+          // whose Employment Hero name doesn't exactly match what's typed
+          // there) got skipped from the hourly $ labour figures with no
+          // trace of why. That's the leading explanation for "labour cost
+          // only shows on some shifts" — e.g. if only closing/PM staff have
+          // been added to Staff pay setup so far, every AM shift's cost
+          // silently comes out as $0 across the whole hourly table, not
+          // just their own hour, because it's summed in below. Now surfaced
+          // as a warning so it's visible instead of silent.
+          result.unmatchedStaffNames = hourlyCost.unmatchedNames;
         }
       } catch (e) {
         result.errors.push(`Employment Hero: ${String(e)}`);

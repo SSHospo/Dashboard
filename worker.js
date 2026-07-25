@@ -25,7 +25,7 @@
 //                                           upload fallback endpoint
 
 import { hashPassword, verifyPassword, createSessionCookie, verifySessionCookie, CLEAR_SESSION_COOKIE } from "./lib/auth.js";
-import { resolvePeriod, previousPeriodOf, sameLastYearOf, toDateInputValue, localDateAndWeekday, splitRangeByLocalHour } from "./lib/periods.js";
+import { resolvePeriod, previousPeriodOf, sameLastYearOf, toDateInputValue, localDateAndWeekday, splitRangeByLocalHour, employmentHeroShiftTimeToUtcMs } from "./lib/periods.js";
 import { computeMetrics, withComparisons, projectedWagePct, NOT_CONFIGURED } from "./lib/kpi.js";
 import * as xeroAdapter from "./lib/xero.js";
 import * as squareAdapter from "./lib/square.js";
@@ -148,8 +148,8 @@ function computeProjectedRosterCost(shifts, staffPay, publicHolidays, timezone) 
 
   for (const shift of shifts) {
     const name = (shift.member_full_name || "").trim();
-    const startMs = shift.start_time ? Date.parse(shift.start_time) : NaN;
-    const endMs = shift.end_time ? Date.parse(shift.end_time) : NaN;
+    const startMs = shift.start_time ? employmentHeroShiftTimeToUtcMs(shift.start_time, timezone) : NaN;
+    const endMs = shift.end_time ? employmentHeroShiftTimeToUtcMs(shift.end_time, timezone) : NaN;
     if (!name || !Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) continue;
 
     const profile = byName.get(name.toLowerCase());
@@ -193,8 +193,8 @@ function computeHourlyRosterCost(shifts, staffPay, publicHolidays, timezone, ros
 
   for (const shift of shifts) {
     const name = (shift.member_full_name || "").trim();
-    const startMs = shift.start_time ? Date.parse(shift.start_time) : NaN;
-    const endMs = shift.end_time ? Date.parse(shift.end_time) : NaN;
+    const startMs = shift.start_time ? employmentHeroShiftTimeToUtcMs(shift.start_time, timezone) : NaN;
+    const endMs = shift.end_time ? employmentHeroShiftTimeToUtcMs(shift.end_time, timezone) : NaN;
     if (!name || !Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) continue;
 
     const profile = byName.get(name.toLowerCase());
@@ -441,32 +441,6 @@ async function handleApi(request, env, ctx, url) {
     return Response.redirect(`${url.origin}/?connected=employmenthero`, 302);
   }
 
-  // TEMPORARY, 25 Jul 2026 — investigating a real bug: the hourly Sales x
-  // Labour panel is showing staff cost on the wrong hours (looks shifted by
-  // roughly Sydney's UTC offset vs the owner's real roster). The code has
-  // always assumed Employment Hero's rostered_shifts start_time/end_time are
-  // full UTC instants (with a "Z"), but that was never actually confirmed
-  // against a raw response — this route dumps a couple of real shifts
-  // exactly as Employment Hero returns them (still behind the login,
-  // read-only, nothing written) so that can be checked properly instead of
-  // guessed at. Delete this route once that's confirmed and the real fix is
-  // in.
-  if (path === "/api/debug/employmenthero-shifts" && request.method === "GET") {
-    const ehAuth = await getValidEmploymentHeroAccessToken(env, kv);
-    if (!ehAuth || !ehAuth.organisationId) {
-      return json({ error: "Employment Hero not connected" }, { status: 400 });
-    }
-    const to = new Date();
-    const from = new Date(to.getTime() - 7 * 24 * 60 * 60 * 1000);
-    const shifts = await ehAdapter.fetchRosteredShifts(ehAuth.accessToken, ehAuth.organisationId, from.toISOString(), to.toISOString());
-    return json({
-      note: "Raw shift objects exactly as Employment Hero returned them — no conversion applied.",
-      dashboardTimezoneSetting: (await getSettings(kv)).timezone,
-      count: shifts.length,
-      sample: shifts.slice(0, 3),
-    });
-  }
-
   if (path === "/api/data" && request.method === "GET") {
     const settings = await getSettings(kv);
     const periodKey = url.searchParams.get("period") || settings.defaultPeriod;
@@ -674,8 +648,8 @@ async function handleApi(request, env, ctx, url) {
         );
         const unmapped = new Set();
         for (const shift of shifts) {
-          const startMs = shift.start_time ? Date.parse(shift.start_time) : NaN;
-          const endMs = shift.end_time ? Date.parse(shift.end_time) : NaN;
+          const startMs = shift.start_time ? employmentHeroShiftTimeToUtcMs(shift.start_time, settings.timezone) : NaN;
+          const endMs = shift.end_time ? employmentHeroShiftTimeToUtcMs(shift.end_time, settings.timezone) : NaN;
           if (!Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) continue;
           const hours = (endMs - startMs) / (60 * 60 * 1000);
           const locationName = shift.location_name || "";

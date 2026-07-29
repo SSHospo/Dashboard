@@ -844,6 +844,29 @@ function projectedWageSubMetricHtml(projectedWage, sources) {
   return `<div class="sub-metric">Projected (rostered): <b>${fmt("percent", projectedWage.pct)}</b> <span class="muted">— from Employment Hero hours &times; your award rates, not from Xero</span></div>${warn}`;
 }
 
+// Directors Fees — carved out of Overheads and shown here instead (25 Jul
+// 2026, owner's request). The Profit figure on this card already deducts
+// Directors Fees, same as it always deducted it when it lived inside
+// Overheads — this doesn't change the real Profit number, it just makes the
+// Directors Fees amount visible instead of buried in Overheads, and adds a
+// what-if for profit without it. Hidden entirely if there's nothing to show
+// (Xero not connected, or genuinely $0 Directors Fees this period).
+function directorsFeesSubMetricHtml(metrics) {
+  const df = metrics.directorsFees;
+  if (typeof df.value !== "number" || df.value === 0) return "";
+  const withoutDF = metrics.profitBeforeDirectorsFees;
+  const withoutDFPct = metrics.profitBeforeDirectorsFeesPct;
+  return `
+    <div class="sub-metric-link" id="directors-fees-toggle">See Directors Fees &rarr;</div>
+    <div class="sub-metric" id="directors-fees-panel" style="display:none;">
+      Directors Fees this period: <b>${fmt("money", df.value)}</b><br>
+      Profit without Directors Fees: <b>${fmt("money", withoutDF.value)}</b>
+      ${typeof withoutDFPct.value === "number" ? `(${fmt("percent", withoutDFPct.value)} of revenue)` : ""}
+      <span class="muted">— what profit would look like if Directors Fees weren't paid; not a real change, just this one line removed</span>
+    </div>
+  `;
+}
+
 function renderCards(metrics, projectedWage, sources) {
   const targets = currentSettings.targets || {};
   const labels = compareLabels();
@@ -920,7 +943,7 @@ function renderCards(metrics, projectedWage, sources) {
       figureSub: overheadsPctNow !== null ? fmt("percent", overheadsPctNow) + " of revenue" : "",
       compareRows: pctCompareRow(labels.prev, metrics.overheads.vsPrevious, "down") + pctCompareRow(labels.ly, metrics.overheads.vsLastYear, "down"),
       extraRows: progressCardHtml(overheadsPctNow, targets.overheadsPct, 0.25, "down"),
-      source: "Operating expenses excluding wages, super and cost of sales &middot; from Xero",
+      source: "Operating expenses excluding wages, super, cost of sales and Directors Fees (see Profit below) &middot; from Xero",
       diagnosis: diagOverheads(metrics, overheadsPctNow, targets),
     })}
   </div>`;
@@ -935,9 +958,10 @@ function renderCards(metrics, projectedWage, sources) {
       figureMain: fmt("percent", profitPct.value),
       figureSub: fmt("money", profit.value),
       figureLabels: "<span>OF REVENUE</span><span>DOLLARS</span>",
+      subMetric: directorsFeesSubMetricHtml(metrics),
       extraRows: progressCardHtml(typeof profitPct.value === "number" ? profitPct.value : null, targets.profitFloorPct, 0.35, "up"),
       compareRows: ptsCompareRow(labels.prev, profitPct.vsPrevious, "up") + ptsCompareRow(labels.ly, profitPct.vsLastYear, "up"),
-      source: "Revenue minus Cost of goods, Wages and Overheads &middot; from Xero",
+      source: "Revenue minus Cost of goods, Wages, Overheads and Directors Fees &middot; from Xero",
       drives: "The number that actually matters. Below floor means one of the cards above needs attention.",
     })}
   </div>`;
@@ -1046,6 +1070,13 @@ document.addEventListener("click", (e) => {
     const opening = panel.style.display === "none";
     panel.style.display = opening ? "block" : "none";
     if (opening) loadDepartmentBreakdown();
+  }
+  // Directors Fees under the Profit card — no fetch needed, the figures are
+  // already in the /api/data response that built this card; just toggling
+  // visibility of what's already rendered.
+  if (e.target && e.target.id === "directors-fees-toggle") {
+    const panel = document.getElementById("directors-fees-panel");
+    if (panel) panel.style.display = panel.style.display === "none" ? "block" : "none";
   }
 });
 

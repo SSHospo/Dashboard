@@ -844,15 +844,16 @@ function projectedWageSubMetricHtml(projectedWage, sources) {
   return `<div class="sub-metric">Projected (rostered): <b>${fmt("percent", projectedWage.pct)}</b> <span class="muted">— from Employment Hero hours &times; your award rates, not from Xero</span></div>${warn}`;
 }
 
-// Wage forecast — added Aug 2026, owner's request: a wage $ budget to plan
-// rosters against, not just a % target. Revenue &times; target Wage % — but
-// the Revenue used is from the SAME 7-day pattern 52 weeks earlier, not a
-// calendar-year shift (see fiftyTwoWeeksPriorOf in lib/periods.js for why:
-// weekday alignment matters for a wage budget since trade is driven by day
-// of week). Deliberately never shown as an actual — always "forecast",
-// always separate from the real current-period Wage %/$ above it on this
-// card. Hidden if either input is missing rather than showing a $0 or a
-// guessed %.
+// Wage forecast — added Aug 2026, owner's request: a wage $ budget for the
+// WEEK AHEAD (not the period currently on screen — see nextPeriodOf note in
+// worker.js), to plan rosters against before that week starts. Revenue
+// &times; target Wage % — the Revenue is from that upcoming week's own
+// match 52 weeks earlier, not a calendar-year shift (see fiftyTwoWeeksPriorOf
+// in lib/periods.js for why: weekday alignment matters for a wage budget
+// since trade is driven by day of week). Deliberately never shown as an
+// actual — always "forecast", always separate from the real current-period
+// Wage %/$ above it on this card. Hidden if either input is missing rather
+// than showing a $0 or a guessed %.
 function wageForecastSubMetricHtml(wageForecast) {
   if (!wageForecast || wageForecast.forecastedBudget === "not_configured" || typeof wageForecast.forecastedBudget !== "number") {
     const missing = [];
@@ -861,9 +862,10 @@ function wageForecastSubMetricHtml(wageForecast) {
     if (!missing.length) return "";
     return `<div class="sub-metric muted">Wage forecast not available yet — needs ${missing.join(" and ")}.</div>`;
   }
-  const range = formatDateRange(wageForecast.period, currentSettings.timezone);
-  return `<div class="sub-metric">Wage forecast: <b>${fmt("money", wageForecast.forecastedBudget)}</b>
-    <span class="muted">— ${fmt("percent", wageForecast.targetWagePct)} of Revenue for ${range} (the same week, 52 weeks earlier). A budgeting figure, not an actual.</span></div>`;
+  const forecastRange = formatDateRange(wageForecast.forecastPeriod, currentSettings.timezone);
+  const basisRange = formatDateRange(wageForecast.basisPeriod, currentSettings.timezone);
+  return `<div class="sub-metric">Wage forecast for ${forecastRange}: <b>${fmt("money", wageForecast.forecastedBudget)}</b>
+    <span class="muted">— ${fmt("percent", wageForecast.targetWagePct)} of Revenue for ${basisRange} (the same week last year). A budgeting figure for the week ahead, not an actual.</span></div>`;
 }
 
 // Directors Fees — carved out of Overheads and shown here instead (25 Jul

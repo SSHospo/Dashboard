@@ -844,6 +844,28 @@ function projectedWageSubMetricHtml(projectedWage, sources) {
   return `<div class="sub-metric">Projected (rostered): <b>${fmt("percent", projectedWage.pct)}</b> <span class="muted">— from Employment Hero hours &times; your award rates, not from Xero</span></div>${warn}`;
 }
 
+// Wage forecast — added Aug 2026, owner's request: a wage $ budget to plan
+// rosters against, not just a % target. Revenue &times; target Wage % — but
+// the Revenue used is from the SAME 7-day pattern 52 weeks earlier, not a
+// calendar-year shift (see fiftyTwoWeeksPriorOf in lib/periods.js for why:
+// weekday alignment matters for a wage budget since trade is driven by day
+// of week). Deliberately never shown as an actual — always "forecast",
+// always separate from the real current-period Wage %/$ above it on this
+// card. Hidden if either input is missing rather than showing a $0 or a
+// guessed %.
+function wageForecastSubMetricHtml(wageForecast) {
+  if (!wageForecast || wageForecast.forecastedBudget === "not_configured" || typeof wageForecast.forecastedBudget !== "number") {
+    const missing = [];
+    if (!wageForecast || typeof wageForecast.targetWagePct !== "number") missing.push("a Wage % target (Settings)");
+    if (!wageForecast || typeof wageForecast.revenue !== "number") missing.push("Revenue for the matching week 52 weeks ago (from Xero)");
+    if (!missing.length) return "";
+    return `<div class="sub-metric muted">Wage forecast not available yet — needs ${missing.join(" and ")}.</div>`;
+  }
+  const range = formatDateRange(wageForecast.period, currentSettings.timezone);
+  return `<div class="sub-metric">Wage forecast: <b>${fmt("money", wageForecast.forecastedBudget)}</b>
+    <span class="muted">— ${fmt("percent", wageForecast.targetWagePct)} of Revenue for ${range} (the same week, 52 weeks earlier). A budgeting figure, not an actual.</span></div>`;
+}
+
 // Directors Fees — carved out of Overheads and shown here instead (25 Jul
 // 2026, owner's request). The Profit figure on this card already deducts
 // Directors Fees, same as it always deducted it when it lived inside
@@ -867,7 +889,7 @@ function directorsFeesSubMetricHtml(metrics) {
   `;
 }
 
-function renderCards(metrics, projectedWage, sources) {
+function renderCards(metrics, projectedWage, sources, wageForecast) {
   const targets = currentSettings.targets || {};
   const labels = compareLabels();
 
@@ -934,7 +956,7 @@ function renderCards(metrics, projectedWage, sources) {
       compareRows: ptsCompareRow(labels.prev, wagePct.vsPrevious, "down") + ptsCompareRow(labels.ly, wagePct.vsLastYear, "down"),
       source: "Wages plus super, as a share of revenue &middot; from Xero",
       diagnosis: diagWage(metrics, targets),
-      subMetric: projectedWageSubMetricHtml(projectedWage, sources) + `<div class="sub-metric-link" id="dept-breakdown-toggle">See Front of House / Back of House breakdown &rarr;</div>`,
+      subMetric: projectedWageSubMetricHtml(projectedWage, sources) + wageForecastSubMetricHtml(wageForecast) + `<div class="sub-metric-link" id="dept-breakdown-toggle">See Front of House / Back of House breakdown &rarr;</div>`,
     })}
     ${cardHtml({
       eyebrow: "OVERHEADS",
@@ -977,7 +999,7 @@ async function loadData() {
   document.getElementById("unverified-banner").style.display = data.unverified ? "block" : "none";
   document.getElementById("period-title").textContent = `${periodLabel()} · ${formatDateRange(data.period, currentSettings.timezone)}`;
   document.getElementById("updated-label").textContent = `Updated ${new Date(data.lastSynced).toLocaleTimeString("en-AU", { hour: "2-digit", minute: "2-digit", timeZone: currentSettings.timezone })} · updates when you open or refresh this page`;
-  renderCards(data.metrics, data.projectedWage, data.sources);
+  renderCards(data.metrics, data.projectedWage, data.sources, data.wageForecast);
 }
 
 async function loadConnections() {

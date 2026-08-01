@@ -23,15 +23,15 @@
 //                                           lib/awardRates.js.
 //   INGEST_TOKEN                         — optional, protects the guided-
 //                                           upload fallback endpoint
- 
+
 import { hashPassword, verifyPassword, createSessionCookie, verifySessionCookie, CLEAR_SESSION_COOKIE } from "./lib/auth.js";
-import { resolvePeriod, previousPeriodOf, sameLastYearOf, toDateInputValue, localDateAndWeekday, splitRangeByLocalHour, employmentHeroShiftTimeToUtcMs } from "./lib/periods.js";
+import { resolvePeriod, previousPeriodOf, sameLastYearOf, fiftyTwoWeeksPriorOf, toDateInputValue, localDateAndWeekday, splitRangeByLocalHour, employmentHeroShiftTimeToUtcMs } from "./lib/periods.js";
 import { computeMetrics, withComparisons, projectedWagePct, NOT_CONFIGURED } from "./lib/kpi.js";
 import * as xeroAdapter from "./lib/xero.js";
 import * as squareAdapter from "./lib/square.js";
 import * as ehAdapter from "./lib/employmenthero.js";
 import { classifyDayType, hourlyRateFor } from "./lib/awardRates.js";
- 
+
 const DEFAULT_SETTINGS = {
   venueName: "",
   timezone: "Australia/Sydney",
@@ -47,34 +47,34 @@ const DEFAULT_SETTINGS = {
     rosterLocations: {}, // { "Kitchen": "boh", "Front House": "foh", ... } — same value set
   },
 };
- 
+
 function json(data, init = {}) {
   return new Response(JSON.stringify(data), {
     ...init,
     headers: { "Content-Type": "application/json", ...(init.headers || {}) },
   });
 }
- 
+
 function round2(n) {
   return Math.round(n * 100) / 100;
 }
- 
+
 /** "7am" / "12pm" / "11pm" — for the hour-by-hour Sales x Labour table. */
 function formatHourLabel(hour) {
   const suffix = hour < 12 ? "am" : "pm";
   const h12 = hour % 12 === 0 ? 12 : hour % 12;
   return `${h12}${suffix}`;
 }
- 
+
 async function getSettings(kv) {
   const raw = await kv.get("settings");
   return raw ? { ...DEFAULT_SETTINGS, ...JSON.parse(raw) } : DEFAULT_SETTINGS;
 }
- 
+
 async function requireSession(request, kv) {
   return verifySessionCookie(kv, request.headers.get("Cookie"));
 }
- 
+
 async function getValidXeroAccessToken(env, kv) {
   const stored = await kv.get("xero:tokens", "json");
   if (!stored) return null;
@@ -92,7 +92,7 @@ async function getValidXeroAccessToken(env, kv) {
   await kv.put("xero:tokens", JSON.stringify(updated));
   return { accessToken: updated.accessToken, tenantId: updated.tenantId };
 }
- 
+
 // CONFIRMED (from a real response, 12 Jul 2026): GET /api/v1/organisations
 // returns { data: { items: [{ id, name, phone, country, logo_url }, ...],
 // item_per_page, page_index, total_pages, total_items } }. Some items can
@@ -104,7 +104,7 @@ function pickEmploymentHeroOrg(orgsResponse) {
   const named = items.filter((o) => o?.name);
   return named[0] || items[0] || null;
 }
- 
+
 // Same shape as getValidXeroAccessToken. Employment Hero access tokens
 // expire after 15 minutes (confirmed against their partner-guides docs) —
 // refresh well before that with the same 60s safety margin used for Xero.
@@ -125,7 +125,7 @@ async function getValidEmploymentHeroAccessToken(env, kv) {
   await kv.put("eh:tokens", JSON.stringify(updated));
   return { accessToken: updated.accessToken, organisationId: updated.organisationId };
 }
- 
+
 // Turns real rostered shifts + the owner's own award-rate setup into a
 // single projected labour cost. Never touches real pay-rate data — the
 // owner tells us each staff member's award level/employment type/age once
@@ -142,22 +142,22 @@ function computeProjectedRosterCost(shifts, staffPay, publicHolidays, timezone) 
   for (const p of staffPay || []) {
     if (p && p.name) byName.set(p.name.trim().toLowerCase(), p);
   }
- 
+
   let cost = 0;
   const unmatchedNames = new Set();
- 
+
   for (const shift of shifts) {
     const name = (shift.member_full_name || "").trim();
     const startMs = shift.start_time ? employmentHeroShiftTimeToUtcMs(shift.start_time, timezone) : NaN;
     const endMs = shift.end_time ? employmentHeroShiftTimeToUtcMs(shift.end_time, timezone) : NaN;
     if (!name || !Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) continue;
- 
+
     const profile = byName.get(name.toLowerCase());
     if (!profile) {
       unmatchedNames.add(name);
       continue;
     }
- 
+
     const hours = (endMs - startMs) / (60 * 60 * 1000);
     const { dateStr, weekday } = localDateAndWeekday(startMs, timezone);
     const dayType = classifyDayType(dateStr, weekday, publicHolidays);
@@ -169,10 +169,10 @@ function computeProjectedRosterCost(shifts, staffPay, publicHolidays, timezone) 
     });
     cost += hours * rate;
   }
- 
+
   return { cost, unmatchedNames: [...unmatchedNames] };
 }
- 
+
 // Same idea as computeProjectedRosterCost, but for the hour-by-hour Sales x
 // Labour breakdown: instead of one total, it splits each shift across the
 // local hours it actually covers (splitRangeByLocalHour) and buckets the
@@ -186,28 +186,28 @@ function computeHourlyRosterCost(shifts, staffPay, publicHolidays, timezone, ros
   for (const p of staffPay || []) {
     if (p && p.name) byName.set(p.name.trim().toLowerCase(), p);
   }
- 
+
   const fohByHour = new Array(24).fill(0);
   const bohByHour = new Array(24).fill(0);
   const unmatchedNames = new Set();
- 
+
   for (const shift of shifts) {
     const name = (shift.member_full_name || "").trim();
     const startMs = shift.start_time ? employmentHeroShiftTimeToUtcMs(shift.start_time, timezone) : NaN;
     const endMs = shift.end_time ? employmentHeroShiftTimeToUtcMs(shift.end_time, timezone) : NaN;
     if (!name || !Number.isFinite(startMs) || !Number.isFinite(endMs) || endMs <= startMs) continue;
- 
+
     const profile = byName.get(name.toLowerCase());
     if (!profile) {
       unmatchedNames.add(name);
       continue;
     }
- 
+
     const locationName = shift.location_name || "";
     const bucket = rosterLocationMapping[locationName];
     if (bucket !== "foh" && bucket !== "boh") continue;
     const target = bucket === "foh" ? fohByHour : bohByHour;
- 
+
     for (const seg of splitRangeByLocalHour(startMs, endMs, timezone)) {
       const dayType = classifyDayType(seg.dateStr, seg.weekday, publicHolidays);
       const rate = hourlyRateFor({
@@ -219,10 +219,10 @@ function computeHourlyRosterCost(shifts, staffPay, publicHolidays, timezone, ros
       target[seg.hour] += seg.durationHours * rate;
     }
   }
- 
+
   return { fohByHour, bohByHour, unmatchedNames: [...unmatchedNames] };
 }
- 
+
 async function pullXeroForPeriod(env, kv, period, settings) {
   const auth = await getValidXeroAccessToken(env, kv);
   if (!auth) return null;
@@ -232,7 +232,7 @@ async function pullXeroForPeriod(env, kv, period, settings) {
   const report = await xeroAdapter.fetchProfitAndLoss(auth.accessToken, auth.tenantId, fromDate, toDate);
   return xeroAdapter.parseProfitAndLoss(report);
 }
- 
+
 /** Resolved once per /api/data request and threaded through every Square
  * call below — re-listing locations per period was burning subrequests for
  * nothing (see the "too many subrequests" incident: fetching the full
@@ -244,7 +244,7 @@ async function resolveSquareLocationIds(env) {
   const locs = await squareAdapter.listLocations(env.SQUARE_ACCESS_TOKEN);
   return locs.map((l) => l.id);
 }
- 
+
 async function pullSquareForPeriod(env, period, locationIds) {
   if (!env.SQUARE_ACCESS_TOKEN || !locationIds) return null;
   return squareAdapter.countTransactions(
@@ -254,7 +254,7 @@ async function pullSquareForPeriod(env, period, locationIds) {
     new Date(period.endUTC).toISOString()
   );
 }
- 
+
 /** Raw (unmerged) Xero + Square pulls for one period — kept separate from
  * computeMetrics so callers can sum raw numbers across buckets before
  * deriving percentages (summing percentages directly would be wrong). */
@@ -265,7 +265,7 @@ async function rawForPeriod(env, kv, period, settings, locationIds) {
   ]);
   return { xero, square };
 }
- 
+
 function sumXero(list) {
   const present = list.filter(Boolean);
   if (!present.length) return null;
@@ -278,13 +278,13 @@ function sumXero(list) {
     directorsFees: sum("directorsFees"),
   };
 }
- 
+
 function sumSquare(list) {
   const present = list.filter((v) => v !== null && v !== undefined);
   if (!present.length) return null;
   return present.reduce((s, v) => s + v, 0);
 }
- 
+
 /** Split a period into N equal-width buckets and pull raw data for each —
  * ONE fetch per bucket, reused both to derive the current-period total (by
  * summing) and the trend sparkline (per-bucket), instead of fetching the
@@ -297,17 +297,17 @@ function makeBuckets(period, count) {
     endUTC: i === count - 1 ? period.endUTC : period.startUTC + (i + 1) * step,
   }));
 }
- 
+
 async function handleApi(request, env, ctx, url) {
   const kv = env.TOKENS;
   const path = url.pathname;
- 
+
   if (path === "/api/session" && request.method === "GET") {
     const hasPassword = !!(await kv.get("auth:password"));
     const loggedIn = await requireSession(request, kv);
     return json({ hasPassword, loggedIn });
   }
- 
+
   if (path === "/api/setup-password" && request.method === "POST") {
     const existing = await kv.get("auth:password");
     if (existing) return json({ error: "password already set" }, { status: 409 });
@@ -319,7 +319,7 @@ async function handleApi(request, env, ctx, url) {
     const cookie = await createSessionCookie(kv);
     return json({ ok: true }, { headers: { "Set-Cookie": cookie } });
   }
- 
+
   if (path === "/api/login" && request.method === "POST") {
     const stored = await kv.get("auth:password");
     if (!stored) return json({ error: "no password set yet" }, { status: 409 });
@@ -329,27 +329,27 @@ async function handleApi(request, env, ctx, url) {
     const cookie = await createSessionCookie(kv);
     return json({ ok: true }, { headers: { "Set-Cookie": cookie } });
   }
- 
+
   if (path === "/api/logout" && request.method === "POST") {
     return json({ ok: true }, { headers: { "Set-Cookie": CLEAR_SESSION_COOKIE } });
   }
- 
+
   // Everything below requires a session.
   if (!(await requireSession(request, kv))) {
     return json({ error: "not logged in" }, { status: 401 });
   }
- 
+
   if (path === "/api/settings" && request.method === "GET") {
     return json(await getSettings(kv));
   }
- 
+
   if (path === "/api/settings" && request.method === "POST") {
     const body = await request.json();
     const merged = { ...DEFAULT_SETTINGS, ...(await getSettings(kv)), ...body };
     await kv.put("settings", JSON.stringify(merged));
     return json(merged);
   }
- 
+
   if (path === "/api/connections" && request.method === "GET") {
     const xeroTokens = await kv.get("xero:tokens", "json");
     const ehTokens = await kv.get("eh:tokens", "json");
@@ -369,14 +369,14 @@ async function handleApi(request, env, ctx, url) {
         : { connected: false },
     });
   }
- 
+
   if (path === "/api/oauth/xero/start" && request.method === "GET") {
     const redirectUri = `${url.origin}/api/oauth/xero/callback`;
     const state = crypto.randomUUID();
     await kv.put(`xero:oauthstate:${state}`, "1", { expirationTtl: 600 });
     return Response.redirect(xeroAdapter.buildAuthorizeUrl(env, redirectUri, state), 302);
   }
- 
+
   if (path === "/api/oauth/xero/callback" && request.method === "GET") {
     const code = url.searchParams.get("code");
     const state = url.searchParams.get("state");
@@ -397,14 +397,14 @@ async function handleApi(request, env, ctx, url) {
     );
     return Response.redirect(`${url.origin}/?connected=xero`, 302);
   }
- 
+
   if (path === "/api/oauth/employmenthero/start" && request.method === "GET") {
     const redirectUri = `${url.origin}/api/oauth/employmenthero/callback`;
     const state = crypto.randomUUID();
     await kv.put(`eh:oauthstate:${state}`, "1", { expirationTtl: 600 });
     return Response.redirect(ehAdapter.buildAuthorizeUrl(env, redirectUri, state), 302);
   }
- 
+
   if (path === "/api/oauth/employmenthero/callback" && request.method === "GET") {
     const code = url.searchParams.get("code");
     const state = url.searchParams.get("state");
@@ -441,7 +441,7 @@ async function handleApi(request, env, ctx, url) {
     );
     return Response.redirect(`${url.origin}/?connected=employmenthero`, 302);
   }
- 
+
   if (path === "/api/data" && request.method === "GET") {
     const settings = await getSettings(kv);
     const periodKey = url.searchParams.get("period") || settings.defaultPeriod;
@@ -449,22 +449,32 @@ async function handleApi(request, env, ctx, url) {
       periodKey === "custom"
         ? { start: url.searchParams.get("start"), end: url.searchParams.get("end") }
         : null;
- 
+
     const period = resolvePeriod(periodKey, settings, Date.now(), custom);
     const previous = previousPeriodOf(period);
     const lastYear = sameLastYearOf(periodKey, settings, Date.now(), custom);
+    // Wage forecast's own comparison period — exactly 52 weeks prior, NOT the
+    // calendar-year shift used by sameLastYearOf above. See the big comment
+    // on fiftyTwoWeeksPriorOf in lib/periods.js for why this needs to be
+    // different: weekday alignment matters for a wage budget in a way it
+    // doesn't for the standard "vs last year" % comparisons elsewhere.
+    const wageForecastPeriod = fiftyTwoWeeksPriorOf(period, settings);
     const locationIds = await resolveSquareLocationIds(env);
- 
+
     // One fetch per trend bucket, then sum those raw numbers for the current
     // period's totals — NOT a separate full-period fetch on top (that
     // redundant fetch, times 9 periods, is what blew the subrequest limit).
     const buckets = makeBuckets(period, 6);
-    const [bucketRaws, prevRaw, lyRaw] = await Promise.all([
+    const [bucketRaws, prevRaw, lyRaw, wageForecastXero] = await Promise.all([
       Promise.all(buckets.map((b) => rawForPeriod(env, kv, b, settings, locationIds))),
       rawForPeriod(env, kv, previous, settings, locationIds),
       rawForPeriod(env, kv, lastYear, settings, locationIds),
+      // Xero only — the wage forecast needs Revenue for that 52-weeks-prior
+      // week, not a Square transaction count, so this skips the Square call
+      // pullXeroForPeriod's siblings above make (one less subrequest).
+      pullXeroForPeriod(env, kv, wageForecastPeriod, settings),
     ]);
- 
+
     const current = computeMetrics(
       sumXero(bucketRaws.map((b) => b.xero)),
       sumSquare(bucketRaws.map((b) => b.square))
@@ -472,15 +482,15 @@ async function handleApi(request, env, ctx, url) {
     const prev = computeMetrics(prevRaw.xero, prevRaw.square);
     const ly = computeMetrics(lyRaw.xero, lyRaw.square);
     const bucketMetrics = bucketRaws.map((b) => computeMetrics(b.xero, b.square));
- 
+
     const xeroConnected = !!(await kv.get("xero:tokens"));
     const squareConnected = !!env.SQUARE_ACCESS_TOKEN;
- 
+
     const metrics = withComparisons(current, prev, ly);
     for (const key of Object.keys(metrics)) {
       metrics[key].trend = bucketMetrics.map((m) => (typeof m[key] === "number" ? m[key] : null));
     }
- 
+
     // Projected Wage % — only computed for the CURRENT period (no trend/
     // comparison history for this one, matching kpi.js's projectedWagePct
     // signature, which was always designed as a single-period supplement,
@@ -515,17 +525,39 @@ async function handleApi(request, env, ctx, url) {
         projectedWage = { pct: NOT_CONFIGURED, cost: null, unmatchedStaffNames: [], error: String(e) };
       }
     }
- 
+
+    // Wage forecast — added Aug 2026, owner's request: "based on our revenue
+    // I'd like to create a budget for wages at 35%." Revenue for the same
+    // 7-day pattern 52 weeks earlier (see wageForecastPeriod above), times
+    // whatever Wage % target the owner has set in Settings. This is a
+    // budgeting number, not a Xero-sourced actual — it never appears mixed
+    // in with the real, current-period Wage % above it on the card, and it
+    // stays "not configured" (never a guessed % or a silently-assumed 0)
+    // unless both a real Revenue figure for that historical week AND an
+    // actual target Wage % are present.
+    const targetWagePct = typeof settings.targets?.wagePct === "number" ? settings.targets.wagePct : null;
+    const revenue52WeeksPrior = wageForecastXero && typeof wageForecastXero.revenue === "number" ? wageForecastXero.revenue : null;
+    const wageForecast = {
+      period: { startUTC: wageForecastPeriod.startUTC, endUTC: wageForecastPeriod.endUTC },
+      revenue: revenue52WeeksPrior,
+      targetWagePct,
+      forecastedBudget:
+        revenue52WeeksPrior !== null && targetWagePct !== null
+          ? round2(revenue52WeeksPrior * targetWagePct)
+          : NOT_CONFIGURED,
+    };
+
     return json({
       period: { key: periodKey, startUTC: period.startUTC, endUTC: period.endUTC },
       metrics,
       projectedWage,
+      wageForecast,
       unverified: !(xeroConnected && squareConnected), // reconciliation confirms it via settings, see Milestone 4/5
       sources: { xero: xeroConnected, square: squareConnected, employmentHero: !!ehAuth },
       lastSynced: new Date().toISOString(),
     });
   }
- 
+
   // Real, current Square category names + roster location names, for the
   // Settings "Front of house / Back of house mapping" UI. Never hardcode
   // these — they're the owner's own naming, fetched fresh each time the
@@ -533,7 +565,7 @@ async function handleApi(request, env, ctx, url) {
   // without needing a rebuild.
   if (path === "/api/department-options" && request.method === "GET") {
     const options = { squareCategories: [], rosterLocations: [], errors: [] };
- 
+
     if (env.SQUARE_ACCESS_TOKEN) {
       try {
         const catalog = await squareAdapter.fetchCatalogCategoryMap(env.SQUARE_ACCESS_TOKEN);
@@ -542,7 +574,7 @@ async function handleApi(request, env, ctx, url) {
         options.errors.push(`Square categories: ${String(e)}`);
       }
     }
- 
+
     const ehAuth = await getValidEmploymentHeroAccessToken(env, kv);
     if (ehAuth && ehAuth.organisationId) {
       try {
@@ -560,10 +592,10 @@ async function handleApi(request, env, ctx, url) {
         options.errors.push(`Employment Hero locations: ${String(e)}`);
       }
     }
- 
+
     return json(options);
   }
- 
+
   // Sales-per-labour-hour by department — a separate optional-extra
   // endpoint (kpi-spec.md's "Optional extras" section), deliberately NOT
   // folded into /api/data: it's a different basis (Square sales, GST
@@ -580,7 +612,7 @@ async function handleApi(request, env, ctx, url) {
         : null;
     const period = resolvePeriod(periodKey, settings, Date.now(), custom);
     const mapping = settings.departmentMapping || { squareCategories: {}, rosterLocations: {} };
- 
+
     const result = {
       period: { key: periodKey, startUTC: period.startUTC, endUTC: period.endUTC },
       foh: { sales: 0, hours: 0, salesPerLabourHour: null },
@@ -598,12 +630,12 @@ async function handleApi(request, env, ctx, url) {
       hourlyLabourConfigured: false,
       averagedOverDays: 1,
     };
- 
+
     const hourlyFohSales = new Array(24).fill(0);
     const hourlyBohSales = new Array(24).fill(0);
     let hourlyFohLabour = new Array(24).fill(0);
     let hourlyBohLabour = new Array(24).fill(0);
- 
+
     if (env.SQUARE_ACCESS_TOKEN) {
       try {
         const locationIds = await resolveSquareLocationIds(env);
@@ -636,7 +668,7 @@ async function handleApi(request, env, ctx, url) {
         result.errors.push(`Square: ${String(e)}`);
       }
     }
- 
+
     const ehAuth = await getValidEmploymentHeroAccessToken(env, kv);
     result.sources.employmentHero = !!ehAuth;
     if (ehAuth && ehAuth.organisationId) {
@@ -660,7 +692,7 @@ async function handleApi(request, env, ctx, url) {
           else if (bucket !== "neither" && locationName) unmapped.add(locationName);
         }
         result.unmappedLocations = [...unmapped];
- 
+
         if (settings.staffPay && settings.staffPay.length > 0) {
           result.hourlyLabourConfigured = true;
           const hourlyCost = computeHourlyRosterCost(
@@ -688,10 +720,10 @@ async function handleApi(request, env, ctx, url) {
         result.errors.push(`Employment Hero: ${String(e)}`);
       }
     }
- 
+
     result.foh.salesPerLabourHour = result.foh.hours > 0 ? result.foh.sales / result.foh.hours : null;
     result.boh.salesPerLabourHour = result.boh.hours > 0 ? result.boh.sales / result.boh.hours : null;
- 
+
     // Average per hour-of-day across the days actually covered so far. For a
     // period that's still running (e.g. "this week" on a Wednesday), divide
     // by the days elapsed, not the full nominal length — otherwise a
@@ -715,10 +747,10 @@ async function handleApi(request, env, ctx, url) {
         },
       });
     }
- 
+
     return json(result);
   }
- 
+
   if (path === "/api/ingest" && request.method === "POST") {
     // Fallback ladder rung 3/4 — guided upload. Stub: wire per-source parsing
     // when a source actually needs this rung (capability-matrix.md).
@@ -728,10 +760,10 @@ async function handleApi(request, env, ctx, url) {
     }
     return json({ error: "not implemented for any source yet" }, { status: 501 });
   }
- 
+
   return json({ error: "not found" }, { status: 404 });
 }
- 
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -745,13 +777,13 @@ export default {
     }
     return env.ASSETS.fetch(request);
   },
- 
+
   // Rung-2 fallback (scheduled pull) — wire per source and uncomment the
   // matching cron in wrangler.toml when a source needs it.
   async scheduled(event, env, ctx) {
     console.log("scheduled trigger fired with no source wired yet");
   },
- 
+
   // Rung-1 fallback (inbound email) — complete when a source's own scheduled
   // export is being caught via Cloudflare Email Routing.
   async email(message, env, ctx) {

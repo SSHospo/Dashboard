@@ -25,7 +25,7 @@
 //                                           upload fallback endpoint
 
 import { hashPassword, verifyPassword, createSessionCookie, verifySessionCookie, CLEAR_SESSION_COOKIE } from "./lib/auth.js";
-import { resolvePeriod, previousPeriodOf, sameLastYearOf, fiftyTwoWeeksPriorOf, toDateInputValue, localDateAndWeekday, splitRangeByLocalHour, employmentHeroShiftTimeToUtcMs } from "./lib/periods.js";
+import { resolvePeriod, previousPeriodOf, nextPeriodOf, sameLastYearOf, fiftyTwoWeeksPriorOf, toDateInputValue, localDateAndWeekday, splitRangeByLocalHour, employmentHeroShiftTimeToUtcMs } from "./lib/periods.js";
 import { computeMetrics, withComparisons, projectedWagePct, NOT_CONFIGURED } from "./lib/kpi.js";
 import * as xeroAdapter from "./lib/xero.js";
 import * as squareAdapter from "./lib/square.js";
@@ -453,12 +453,17 @@ async function handleApi(request, env, ctx, url) {
     const period = resolvePeriod(periodKey, settings, Date.now(), custom);
     const previous = previousPeriodOf(period);
     const lastYear = sameLastYearOf(periodKey, settings, Date.now(), custom);
-    // Wage forecast's own comparison period — exactly 52 weeks prior, NOT the
-    // calendar-year shift used by sameLastYearOf above. See the big comment
-    // on fiftyTwoWeeksPriorOf in lib/periods.js for why this needs to be
-    // different: weekday alignment matters for a wage budget in a way it
-    // doesn't for the standard "vs last year" % comparisons elsewhere.
-    const wageForecastPeriod = fiftyTwoWeeksPriorOf(period, settings);
+    // Wage forecast is a budget for the week AHEAD, not the period currently
+    // on screen — the owner planning next week's roster wants next week's
+    // number, not a re-statement of the week he's already looking at. So the
+    // forecast target is nextPeriodOf(period) (e.g. viewing 27 Jul-2 Aug
+    // 2026 -> forecast is FOR 3-9 Aug 2026), and the Revenue it's built from
+    // is that upcoming week's own 52-weeks-prior match (3-9 Aug 2026 -> 4-10
+    // Aug 2025) — NOT the calendar-year shift sameLastYearOf uses for the
+    // standard comparisons elsewhere. See fiftyTwoWeeksPriorOf's comment in
+    // lib/periods.js for why 52 weeks specifically (weekday alignment).
+    const wageForecastTargetPeriod = nextPeriodOf(period);
+    const wageForecastPeriod = fiftyTwoWeeksPriorOf(wageForecastTargetPeriod, settings);
     const locationIds = await resolveSquareLocationIds(env);
 
     // One fetch per trend bucket, then sum those raw numbers for the current
@@ -527,9 +532,10 @@ async function handleApi(request, env, ctx, url) {
     }
 
     // Wage forecast — added Aug 2026, owner's request: "based on our revenue
-    // I'd like to create a budget for wages at 35%." Revenue for the same
-    // 7-day pattern 52 weeks earlier (see wageForecastPeriod above), times
-    // whatever Wage % target the owner has set in Settings. This is a
+    // I'd like to create a budget for wages at 35%", then clarified it's a
+    // forward-looking budget for the week AHEAD (see nextPeriodOf note
+    // above), built from that upcoming week's own Revenue 52 weeks earlier
+    // times whatever Wage % target the owner has set in Settings. This is a
     // budgeting number, not a Xero-sourced actual — it never appears mixed
     // in with the real, current-period Wage % above it on the card, and it
     // stays "not configured" (never a guessed % or a silently-assumed 0)
@@ -538,7 +544,11 @@ async function handleApi(request, env, ctx, url) {
     const targetWagePct = typeof settings.targets?.wagePct === "number" ? settings.targets.wagePct : null;
     const revenue52WeeksPrior = wageForecastXero && typeof wageForecastXero.revenue === "number" ? wageForecastXero.revenue : null;
     const wageForecast = {
-      period: { startUTC: wageForecastPeriod.startUTC, endUTC: wageForecastPeriod.endUTC },
+      // The week this budget is FOR (the week after whatever's selected).
+      forecastPeriod: { startUTC: wageForecastTargetPeriod.startUTC, endUTC: wageForecastTargetPeriod.endUTC },
+      // The historical week the Revenue figure below actually came from
+      // (that forecast week, shifted back exactly 52 weeks).
+      basisPeriod: { startUTC: wageForecastPeriod.startUTC, endUTC: wageForecastPeriod.endUTC },
       revenue: revenue52WeeksPrior,
       targetWagePct,
       forecastedBudget:

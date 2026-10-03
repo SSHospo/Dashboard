@@ -401,18 +401,25 @@ async function handleApi(request, env, ctx, url) {
   if (path === "/api/oauth/employmenthero/start" && request.method === "GET") {
     const redirectUri = `${url.origin}/api/oauth/employmenthero/callback`;
     const state = crypto.randomUUID();
-    await kv.put(`eh:oauthstate:${state}`, "1", { expirationTtl: 600 });
-    return Response.redirect(ehAdapter.buildAuthorizeUrl(env, redirectUri, state), 302);
+    // PKCE (required by Employment Hero from 14 Sep 2026 — see the header
+    // comment in lib/employmenthero.js): the code_verifier generated here
+    // has to be the exact same one presented on the callback below, so it's
+    // stored against the state, the same KV entry that already existed for
+    // CSRF protection — this doubles as that value instead of a bare "1".
+    const codeVerifier = ehAdapter.generateCodeVerifier();
+    const codeChallenge = await ehAdapter.generateCodeChallenge(codeVerifier);
+    await kv.put(`eh:oauthstate:${state}`, codeVerifier, { expirationTtl: 600 });
+    return Response.redirect(ehAdapter.buildAuthorizeUrl(env, redirectUri, state, codeChallenge), 302);
   }
 
   if (path === "/api/oauth/employmenthero/callback" && request.method === "GET") {
     const code = url.searchParams.get("code");
     const state = url.searchParams.get("state");
-    const validState = state && (await kv.get(`eh:oauthstate:${state}`));
-    if (!code || !validState) return json({ error: "invalid oauth callback" }, { status: 400 });
+    const codeVerifier = state && (await kv.get(`eh:oauthstate:${state}`));
+    if (!code || !codeVerifier) return json({ error: "invalid oauth callback" }, { status: 400 });
     await kv.delete(`eh:oauthstate:${state}`);
     const redirectUri = `${url.origin}/api/oauth/employmenthero/callback`;
-    const tokens = await ehAdapter.exchangeCode(env, code, redirectUri);
+    const tokens = await ehAdapter.exchangeCode(env, code, redirectUri, codeVerifier);
     // Pick the named organisation, same "confirm it's their business" pattern
     // as Xero's tenant lookup — the owner should verify this on the
     // Connections panel before it's trusted for anything.
